@@ -132,28 +132,6 @@ def _parse_meta(raw: str, sheets: list) -> dict:
             break
     return meta
 
-def sheets_to_excel(sheets: list[dict]) -> bytes:
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        seen = {}
-        for sh in sheets:
-            name = str(sh.get("name", "Sheet"))
-            # sanitise sheet name
-            for ch in r'/\?*[]:\x00': name = name.replace(ch, "-")
-            name = name[:31].strip() or "Sheet"
-            # deduplicate
-            seen[name] = seen.get(name, 0) + 1
-            if seen[name] > 1:
-                name = name[:28] + f" {seen[name]}"
-
-            rows = sh.get("rows", [])
-            if not rows:
-                pd.DataFrame().to_excel(writer, sheet_name=name, index=False)
-                continue
-            df = pd.DataFrame(rows[1:], columns=rows[0])
-            df.to_excel(writer, sheet_name=name, index=False)
-    return buf.getvalue()
-
 # ---------------------------------------------------------------------------
 # Result
 # ---------------------------------------------------------------------------
