@@ -138,113 +138,155 @@ st.markdown("""
 </div>""", unsafe_allow_html=True)
 
 # ── Results view ──────────────────────────────────────────────────────────────
-def _tone_meta(name):
+def _tone(name):
     n = name.lower()
     if any(k in n for k in ("summary","overview","dashboard","reconciliation summary")):
-        return "📊", "#B5793A"
+        return "summary", "✓", "var(--bg-success)", "var(--text-success)", "ti-chart-bar"
     if any(k in n for k in ("matched","match","agree","payment","invoice","credit")):
-        return "✅", "#2D6A4F"
+        return "matched", "✓", "var(--bg-success)", "var(--text-success)", "ti-circle-check"
     if any(k in n for k in ("diff","mismatch","issue","varianc","key diff","discrepan")):
-        return "⚠️", "#9B2226"
+        return "diff", "!", "var(--bg-danger)", "var(--text-danger)", "ti-alert-triangle"
     if any(k in n for k in ("tds","tax","withhold")):
-        return "🧾", "#CA6702"
+        return "tds", "T", "var(--bg-warning)", "var(--text-warning)", "ti-receipt"
     if any(k in n for k in ("only in a","only a","unmatched a")):
-        return "🔵", "#5E548E"
+        return "onlya", "A", "var(--bg-pro)", "var(--text-pro)", "ti-arrow-right"
     if any(k in n for k in ("only in b","only b","unmatched b")):
-        return "🟣", "#1D6FA4"
-    return "📋", "#495867"
+        return "onlyb", "B", "var(--bg-accent)", "var(--text-accent)", "ti-arrow-left"
+    if any(k in n for k in ("conclusion","auditor","finding")):
+        return "conc", "★", "var(--bg-accent)", "var(--text-accent)", "ti-clipboard-check"
+    return "other", "≡", "var(--surface-1)", "var(--text-secondary)", "ti-table"
+
+def _fmt_val(v):
+    if isinstance(v, float):
+        return f"{v:,.2f}"
+    if isinstance(v, int) and not isinstance(v, bool):
+        return f"{v:,}"
+    if v is None or v == "":
+        return "—"
+    return str(v)
+
+def _status_badge(v):
+    sv = str(v).strip().upper()
+    if sv in ("MATCHED","CLEAR","SUBSTANTIALLY RECONCILED"):
+        return f'<span style="display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:500;padding:2px 8px;border-radius:999px;background:var(--bg-success);color:var(--text-success)">✓ {v}</span>'
+    if sv in ("UNRESOLVED","HIGH"):
+        return f'<span style="display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:500;padding:2px 8px;border-radius:999px;background:var(--bg-danger);color:var(--text-danger)">✕ {v}</span>'
+    if sv in ("MINOR","MEDIUM","ACCEPTABLE","PARTIAL","LOW"):
+        return f'<span style="display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:500;padding:2px 8px;border-radius:999px;background:var(--bg-warning);color:var(--text-warning)">~ {v}</span>'
+    return v
+
+STATUS_WORDS = {"MATCHED","CLEAR","SUBSTANTIALLY RECONCILED","UNRESOLVED","HIGH",
+                "MINOR","MEDIUM","ACCEPTABLE","PARTIAL","LOW"}
+
+def _render_table(headers, data):
+    """Render a clean HTML table with right-aligned numbers, status badges, coloured amounts."""
+    th = "".join(
+        f'<th style="background:var(--surface-1);padding:8px 12px;text-align:{"right" if i>0 else "left"};'
+        f'font-weight:500;font-size:11px;letter-spacing:.04em;text-transform:uppercase;'
+        f'color:var(--text-muted);border-bottom:0.5px solid var(--border);white-space:nowrap">{h}</th>'
+        for i, h in enumerate(headers)
+    )
+    rows_html = ""
+    for ri, row in enumerate(data):
+        pad = list(row) + [""] * max(0, len(headers) - len(row))
+        cells = ""
+        for ci, v in enumerate(pad[:len(headers)]):
+            is_num = isinstance(v, (int, float)) and not isinstance(v, bool)
+            sv = str(v).strip().upper()
+            align = "right" if is_num else "left"
+            bg = "var(--surface-1)" if ri % 2 else "var(--surface-2)"
+            if sv in STATUS_WORDS:
+                display = _status_badge(v)
+            elif is_num:
+                num_str = _fmt_val(v)
+                color = "var(--text-danger)" if v < 0 else ("var(--text-muted)" if v == 0 else "var(--text-primary)")
+                weight = "500" if v != 0 else "400"
+                display = f'<span style="color:{color};font-weight:{weight};font-variant-numeric:tabular-nums">{num_str}</span>'
+            else:
+                display = _fmt_val(v)
+            cells += (f'<td style="padding:8px 12px;text-align:{align};vertical-align:middle;'
+                     f'border-bottom:0.5px solid var(--border);background:{bg};font-size:12.5px">'
+                     f'{display}</td>')
+        rows_html += f"<tr>{cells}</tr>"
+    return (
+        f'<div style="overflow-x:auto;border:0.5px solid var(--border);border-radius:8px;margin-top:.5rem">'
+        f'<table style="width:100%;border-collapse:collapse">'
+        f'<thead><tr>{th}</tr></thead>'
+        f'<tbody>{rows_html}</tbody></table></div>'
+    )
 
 if "result" in st.session_state:
     r = st.session_state["result"]
 
-    # ── Header card ──
+    # ── Summary card ──────────────────────────────────────────────────────────
     with st.container(border=True):
         st.markdown(
-            '<div class="card-h"><span class="num" style="background:linear-gradient(135deg,#2D6A4F,#1a4a35)">✓</span>'
-            '<span class="card-t">Reconciliation complete</span></div>',
+            '<div style="display:flex;align-items:center;gap:8px;margin-bottom:.65rem">'
+            '<div style="width:22px;height:22px;background:var(--bg-success);border-radius:50%;'
+            'display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--text-success)">✓</div>'
+            '<span style="font-weight:500;font-size:15px">Reconciliation complete</span></div>',
             unsafe_allow_html=True)
-
-        # CA summary
         if r.summary:
-            st.markdown(f'<div class="summary-box">{r.summary}</div>',
-                        unsafe_allow_html=True)
-
-        # Cost bar
+            st.markdown(
+                f'<p style="color:var(--text-secondary);font-size:13px;line-height:1.7;margin-bottom:.8rem">{r.summary}</p>',
+                unsafe_allow_html=True)
+        # Cost pills
         st.markdown(
-            f'<div style="margin:.4rem 0 .6rem">'
-            f'<span class="chip">{r.model_label.split(" (")[0]}</span>'
-            f'<span class="chip">In {r.input_tokens:,} · Out {r.output_tokens:,} tokens</span>'
-            f'<span class="chip">₹ {r.cost_inr:,.2f} &nbsp;($ {r.cost_usd:.4f})</span>'
+            f'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:.9rem">'
+            f'<span style="font-size:11px;font-weight:500;background:var(--surface-1);border:0.5px solid var(--border);border-radius:999px;padding:3px 10px;color:var(--text-secondary)">{r.model_label.split(" (")[0]}</span>'
+            f'<span style="font-size:11px;font-weight:500;background:var(--surface-1);border:0.5px solid var(--border);border-radius:999px;padding:3px 10px;color:var(--text-secondary)">In {r.input_tokens:,} · Out {r.output_tokens:,} tokens</span>'
+            f'<span style="font-size:11px;font-weight:500;background:var(--surface-1);border:0.5px solid var(--border);border-radius:999px;padding:3px 10px;color:var(--text-secondary)">₹ {r.cost_inr:,.2f} ($ {r.cost_usd:.4f})</span>'
             f'</div>', unsafe_allow_html=True)
-
         fname = f"Reco_{datetime.now():%Y%m%d_%H%M}.xlsx"
         st.download_button(
-            "⬇️  Download Full Reconciliation Report (.xlsx)",
+            "⬇️  Download full reconciliation report (.xlsx)",
             data=r.excel_bytes, file_name=fname,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True)
 
-    # ── One expander per sheet ──
+    # ── One expander per sheet ─────────────────────────────────────────────────
     if r.sheets:
-        st.markdown('<div style="font-family:serif;font-weight:600;font-size:1.05rem;margin:.4rem 0 .2rem;color:#272220;">Details by Category</div>', unsafe_allow_html=True)
-
+        st.markdown('<p style="font-weight:500;font-size:13px;color:var(--text-secondary);'
+                    'margin:.6rem 0 .3rem">Details by category</p>', unsafe_allow_html=True)
         for sh in r.sheets:
             rows   = sh.get("rows", [])
             n_data = max(0, len(rows) - 1)
-            icon, color = _tone_meta(sh["name"])
-            label  = f"{icon}  {sh['name']}  —  {n_data} entr{'y' if n_data==1 else 'ies'}"
-
-            with st.expander(label, expanded=False):
+            tone, symbol, icon_bg, icon_fg, _ = _tone(sh["name"])
+            label  = f"{sh['name']}  —  {n_data} {'entry' if n_data==1 else 'entries'}"
+            with st.expander(label, expanded=(tone in ("diff","tds","onlya","onlyb"))):
                 if len(rows) < 2:
-                    st.caption("No entries in this category.")
+                    st.markdown('<p style="color:var(--text-muted);font-size:13px">No entries in this category.</p>',
+                                unsafe_allow_html=True)
                     continue
-
                 headers = [str(h) for h in rows[0]]
                 data    = rows[1:]
+                # Alert banner for problem sheets
+                if tone == "diff":
+                    st.markdown(
+                        '<div style="display:flex;gap:10px;padding:.7rem 1rem;border-radius:8px;'
+                        'margin-bottom:.75rem;border-left:3px solid var(--text-danger);background:var(--bg-danger)">'
+                        '<span style="color:var(--text-danger);font-size:14px">⚠</span>'
+                        '<div><strong style="font-size:13px;color:var(--text-primary)">Differences found</strong>'
+                        '<div style="font-size:12px;color:var(--text-secondary);margin-top:2px">'
+                        'Review each row carefully — unresolved items need follow-up.</div></div></div>',
+                        unsafe_allow_html=True)
+                elif tone in ("onlya","onlyb"):
+                    side = "Party A" if tone=="onlya" else "Party B"
+                    st.markdown(
+                        f'<div style="display:flex;gap:10px;padding:.7rem 1rem;border-radius:8px;'
+                        f'margin-bottom:.75rem;border-left:3px solid var(--text-warning);background:var(--bg-warning)">'
+                        f'<span style="color:var(--text-warning);font-size:14px">!</span>'
+                        f'<div><strong style="font-size:13px;color:var(--text-primary)">'
+                        f'Present only in {side}\'s books</strong>'
+                        f'<div style="font-size:12px;color:var(--text-secondary);margin-top:2px">'
+                        f'These entries have no counterpart in the other ledger.</div></div></div>',
+                        unsafe_allow_html=True)
+                st.markdown(_render_table(headers, data), unsafe_allow_html=True)
 
-                # Render as an HTML table for full control
-                def _fmt(v):
-                    if isinstance(v, (int, float)) and not isinstance(v, bool):
-                        return f"{v:,.2f}" if isinstance(v, float) else f"{v:,}"
-                    sv = str(v) if v is not None else ""
-                    # colour status words
-                    if sv.upper() in ("MATCHED","CLEAR","LOW"):
-                        return f'<span style="color:#2D6A4F;font-weight:600">{sv}</span>'
-                    if sv.upper() in ("UNRESOLVED","HIGH"):
-                        return f'<span style="color:#9B2226;font-weight:600">{sv}</span>'
-                    if sv.upper() in ("MINOR","MEDIUM","ACCEPTABLE","SUBSTANTIALLY RECONCILED"):
-                        return f'<span style="color:#CA6702;font-weight:600">{sv}</span>'
-                    return sv
-
-                th_style = (f"background:{color};color:#fff;padding:8px 12px;"
-                            "font-size:.82rem;font-weight:600;text-align:left;"
-                            "border:1px solid rgba(255,255,255,.15);white-space:nowrap;")
-                td_style = ("padding:7px 12px;font-size:.85rem;border:1px solid #EAE3D8;"
-                            "vertical-align:middle;")
-                td_alt   = ("padding:7px 12px;font-size:.85rem;border:1px solid #EAE3D8;"
-                            "background:#F7F3EE;vertical-align:middle;")
-
-                head_html = "".join(f"<th style='{th_style}'>{h}</th>" for h in headers)
-                rows_html = ""
-                for ri, row in enumerate(data):
-                    pad = list(row) + [""] * max(0, len(headers) - len(row))
-                    cells = "".join(
-                        f"<td style='{td_alt if ri%2 else td_style}'>{_fmt(v)}</td>"
-                        for v in pad[:len(headers)]
-                    )
-                    rows_html += f"<tr>{cells}</tr>"
-
-                st.markdown(
-                    f'<div style="overflow-x:auto;border-radius:10px;border:1px solid #EAE3D8;">'
-                    f'<table style="border-collapse:collapse;width:100%;min-width:400px;">'
-                    f'<thead><tr>{head_html}</tr></thead>'
-                    f'<tbody>{rows_html}</tbody></table></div>',
-                    unsafe_allow_html=True)
-
-    with st.expander("🔍 Raw Claude response"):
+    with st.expander("Raw Claude response"):
         st.text(r.raw_response[:6000] + ("…" if len(r.raw_response) > 6000 else ""))
 
-    st.button("↺  Start a New Reconciliation", on_click=start_new, use_container_width=True)
+    st.button("↺  Start a new reconciliation", on_click=start_new, use_container_width=True)
     st.stop()
 
 # ── Form view ─────────────────────────────────────────────────────────────────
