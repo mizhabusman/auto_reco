@@ -138,43 +138,108 @@ st.markdown("""
 </div>""", unsafe_allow_html=True)
 
 # ── Results view ──────────────────────────────────────────────────────────────
+def _tone_meta(name):
+    n = name.lower()
+    if any(k in n for k in ("summary","overview","dashboard","reconciliation summary")):
+        return "📊", "#B5793A"
+    if any(k in n for k in ("matched","match","agree","payment","invoice","credit")):
+        return "✅", "#2D6A4F"
+    if any(k in n for k in ("diff","mismatch","issue","varianc","key diff","discrepan")):
+        return "⚠️", "#9B2226"
+    if any(k in n for k in ("tds","tax","withhold")):
+        return "🧾", "#CA6702"
+    if any(k in n for k in ("only in a","only a","unmatched a")):
+        return "🔵", "#5E548E"
+    if any(k in n for k in ("only in b","only b","unmatched b")):
+        return "🟣", "#1D6FA4"
+    return "📋", "#495867"
+
 if "result" in st.session_state:
     r = st.session_state["result"]
 
+    # ── Header card ──
     with st.container(border=True):
-        st.markdown('<div class="card-h"><span class="num">✓</span>'
-                    '<span class="card-t">Reconciliation complete</span></div>',
-                    unsafe_allow_html=True)
+        st.markdown(
+            '<div class="card-h"><span class="num" style="background:linear-gradient(135deg,#2D6A4F,#1a4a35)">✓</span>'
+            '<span class="card-t">Reconciliation complete</span></div>',
+            unsafe_allow_html=True)
 
-        # CA's plain-English summary
+        # CA summary
         if r.summary:
             st.markdown(f'<div class="summary-box">{r.summary}</div>',
                         unsafe_allow_html=True)
 
-        # Sheet count chips
-        if r.sheets:
-            st.markdown(
-                " ".join(f'<span class="chip">📄 {sh["name"]} '
-                         f'({max(0, len(sh.get("rows",[])) - 1)} rows)</span>'
-                         for sh in r.sheets),
-                unsafe_allow_html=True)
-
-        # Cost
+        # Cost bar
         st.markdown(
-            f'<div style="margin:.6rem 0">'
+            f'<div style="margin:.4rem 0 .6rem">'
             f'<span class="chip">{r.model_label.split(" (")[0]}</span>'
             f'<span class="chip">In {r.input_tokens:,} · Out {r.output_tokens:,} tokens</span>'
             f'<span class="chip">₹ {r.cost_inr:,.2f} &nbsp;($ {r.cost_usd:.4f})</span>'
             f'</div>', unsafe_allow_html=True)
 
-        # Download
-        pa = r.sheets[0]["rows"][1][1] if r.sheets and len(r.sheets[0].get("rows",[])) > 1 else "A"
         fname = f"Reco_{datetime.now():%Y%m%d_%H%M}.xlsx"
         st.download_button(
-            "⬇️  Download Reconciliation Report (.xlsx)",
+            "⬇️  Download Full Reconciliation Report (.xlsx)",
             data=r.excel_bytes, file_name=fname,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True)
+
+    # ── One expander per sheet ──
+    if r.sheets:
+        st.markdown('<div style="font-family:serif;font-weight:600;font-size:1.05rem;margin:.4rem 0 .2rem;color:#272220;">Details by Category</div>', unsafe_allow_html=True)
+
+        for sh in r.sheets:
+            rows   = sh.get("rows", [])
+            n_data = max(0, len(rows) - 1)
+            icon, color = _tone_meta(sh["name"])
+            label  = f"{icon}  {sh['name']}  —  {n_data} entr{'y' if n_data==1 else 'ies'}"
+
+            with st.expander(label, expanded=False):
+                if len(rows) < 2:
+                    st.caption("No entries in this category.")
+                    continue
+
+                headers = [str(h) for h in rows[0]]
+                data    = rows[1:]
+
+                # Render as an HTML table for full control
+                def _fmt(v):
+                    if isinstance(v, (int, float)) and not isinstance(v, bool):
+                        return f"{v:,.2f}" if isinstance(v, float) else f"{v:,}"
+                    sv = str(v) if v is not None else ""
+                    # colour status words
+                    if sv.upper() in ("MATCHED","CLEAR","LOW"):
+                        return f'<span style="color:#2D6A4F;font-weight:600">{sv}</span>'
+                    if sv.upper() in ("UNRESOLVED","HIGH"):
+                        return f'<span style="color:#9B2226;font-weight:600">{sv}</span>'
+                    if sv.upper() in ("MINOR","MEDIUM","ACCEPTABLE","SUBSTANTIALLY RECONCILED"):
+                        return f'<span style="color:#CA6702;font-weight:600">{sv}</span>'
+                    return sv
+
+                th_style = (f"background:{color};color:#fff;padding:8px 12px;"
+                            "font-size:.82rem;font-weight:600;text-align:left;"
+                            "border:1px solid rgba(255,255,255,.15);white-space:nowrap;")
+                td_style = ("padding:7px 12px;font-size:.85rem;border:1px solid #EAE3D8;"
+                            "vertical-align:middle;")
+                td_alt   = ("padding:7px 12px;font-size:.85rem;border:1px solid #EAE3D8;"
+                            "background:#F7F3EE;vertical-align:middle;")
+
+                head_html = "".join(f"<th style='{th_style}'>{h}</th>" for h in headers)
+                rows_html = ""
+                for ri, row in enumerate(data):
+                    pad = list(row) + [""] * max(0, len(headers) - len(row))
+                    cells = "".join(
+                        f"<td style='{td_alt if ri%2 else td_style}'>{_fmt(v)}</td>"
+                        for v in pad[:len(headers)]
+                    )
+                    rows_html += f"<tr>{cells}</tr>"
+
+                st.markdown(
+                    f'<div style="overflow-x:auto;border-radius:10px;border:1px solid #EAE3D8;">'
+                    f'<table style="border-collapse:collapse;width:100%;min-width:400px;">'
+                    f'<thead><tr>{head_html}</tr></thead>'
+                    f'<tbody>{rows_html}</tbody></table></div>',
+                    unsafe_allow_html=True)
 
     with st.expander("🔍 Raw Claude response"):
         st.text(r.raw_response[:6000] + ("…" if len(r.raw_response) > 6000 else ""))
