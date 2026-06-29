@@ -1,15 +1,19 @@
 """
-reco.py — Reads raw files, calls Claude, parses the flexible workbook JSON.
+reco.py — Read files, call Claude, parse response, exec the Excel code.
 
-Also owns:
-  • the model catalogue (id, label, cost tier, pricing)
-  • token usage + cost calculation in INR
+Three things come out:
+  - excel_bytes  : the .xlsx file Claude produced
+  - summary      : dict for the web UI (party names, insights, etc.)
+  - token usage  : for cost display
 """
 
 from __future__ import annotations
+import csv as _csv
 import io
 import json
 import os
+import re
+import textwrap
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -19,10 +23,8 @@ from anthropic import Anthropic
 from prompt import build_prompt
 
 # ---------------------------------------------------------------------------
-# Model catalogue
+# Model catalogue  (edit pricing here if rates change)
 # ---------------------------------------------------------------------------
-# Pricing is USD per 1,000,000 tokens (input, output).
-# >>> VERIFY against https://docs.claude.com pricing and adjust if needed. <<<
 MODELS: dict[str, dict[str, Any]] = {
     "Haiku (fastest, lowest cost)": {
         "id": "claude-haiku-4-5-20251001",
@@ -32,7 +34,7 @@ MODELS: dict[str, dict[str, Any]] = {
     },
     "Sonnet (balanced — recommended)": {
         "id": "claude-sonnet-4-6",
-        "tier": "Balanced cost · Accurate",
+        "tier": "Balanced · Accurate",
         "in_per_m": 3.0,
         "out_per_m": 15.0,
     },
@@ -44,26 +46,27 @@ MODELS: dict[str, dict[str, Any]] = {
     },
 }
 DEFAULT_MODEL = "Sonnet (balanced — recommended)"
-
-# USD -> INR. Editable in the UI; this is just the default.
 DEFAULT_USD_INR = 85.0
-
 MAX_OUTPUT_TOKENS = 16000
 
+MODEL_NAMES    = ["Haiku", "Sonnet", "Opus"]
+MODEL_CAPTIONS = ["Low cost · Fast", "Balanced · Recommended", "High cost · Most capable"]
+NAME_TO_LABEL  = {
+    "Haiku":  "Haiku (fastest, lowest cost)",
+    "Sonnet": "Sonnet (balanced — recommended)",
+    "Opus":   "Opus (most capable, highest cost)",
+}
+DEFAULT_INDEX = 1
+
 
 # ---------------------------------------------------------------------------
-# Raw file -> text dump (no cleaning; Claude handles structure)
-# Robust to: ragged CSV rows, odd delimiters, wrong file extensions,
-# and .xls files that are actually .xlsx underneath (common in Tally exports).
+# File → raw text (Claude reads the structure; we just dump bytes as text)
 # ---------------------------------------------------------------------------
-import csv as _csv
-
-
 def file_to_text(file_bytes: bytes, filename: str) -> str:
     name = filename.lower()
     if name.endswith((".csv", ".tsv", ".txt")):
-        return _csv_to_text(file_bytes)
-    return _excel_to_text(file_bytes)
+        return _csv_bytes_to_text(file_bytes)
+    return _excel_bytes_to_text(file_bytes)
 
 
 def _decode(b: bytes) -> str:
@@ -75,29 +78,22 @@ def _decode(b: bytes) -> str:
     return b.decode("utf-8", errors="replace")
 
 
-def _csv_to_text(file_bytes: bytes) -> str:
-    """Parse with the tolerant `csv` module (handles ragged rows that break
-    pandas' C parser), drop fully-empty rows, re-emit clean CSV text."""
+def _csv_bytes_to_text(file_bytes: bytes) -> str:
     text = _decode(file_bytes)
-    # sniff delimiter from a sample; fall back to comma
     delim = ","
     try:
         dialect = _csv.Sniffer().sniff(text[:4096], delimiters=",;\t|")
         delim = dialect.delimiter
     except Exception:
         pass
-    rows = []
-    for row in _csv.reader(io.StringIO(text), delimiter=delim):
-        if any((c or "").strip() for c in row):
-            rows.append(row)
-    out = io.StringIO()
-    _csv.writer(out).writerows(rows)
-    return f"## Sheet: CSV\n{out.getvalue()}"
+    rows = [r for r in _csv.reader(io.StringIO(text), delimiter=delim)
+            if any((c or "").strip() for c in r)]
+    buf = io.StringIO()
+    _csv.writer(buf).writerows(rows)
+    return f"## Sheet: CSV\n{buf.getvalue()}"
 
 
-def _excel_to_text(file_bytes: bytes) -> str:
-    """Try engines in order so a mislabeled file (e.g. .xls that is really
-    .xlsx, or vice-versa) still reads."""
+def _excel_bytes_to_text(file_bytes: bytes) -> str:
     last_err = None
     for engine in ("openpyxl", "xlrd", None):
         try:
@@ -106,29 +102,55 @@ def _excel_to_text(file_bytes: bytes) -> str:
             parts = []
             for sheet in xl.sheet_names:
                 df = xl.parse(sheet, header=None, dtype=str, keep_default_na=False)
-                parts.append(_df_to_csv_text(df, sheet))
+                df = df.replace("", pd.NA).dropna(how="all").dropna(axis=1, how="all").fillna("")
+                parts.append(f"## Sheet: {sheet}\n{df.to_csv(index=False, header=False)}")
             return "\n\n".join(parts)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             last_err = e
-            continue
-    raise RuntimeError(
-        f"Could not read this spreadsheet (tried xlsx and xls readers). "
-        f"Last error: {last_err}"
-    )
-
-
-def _df_to_csv_text(df: pd.DataFrame, sheet_name: str) -> str:
-    df = df.replace("", pd.NA).dropna(how="all").dropna(axis=1, how="all").fillna("")
-    csv = df.to_csv(index=False, header=False)
-    return f"## Sheet: {sheet_name}\n{csv}"
+    raise RuntimeError(f"Could not read spreadsheet — {last_err}")
 
 
 # ---------------------------------------------------------------------------
-# Result
+# Parse Claude's response  (<summary>…</summary>  <excel_code>…</excel_code>)
+# ---------------------------------------------------------------------------
+def _extract_tag(text: str, tag: str) -> str:
+    m = re.search(rf"<{tag}>(.*?)</{tag}>", text, re.DOTALL)
+    return m.group(1).strip() if m else ""
+
+
+def _parse_summary(raw: str) -> dict:
+    txt = _extract_tag(raw, "summary")
+    if not txt:
+        return {"party_a": "Party A", "party_b": "Party B",
+                "period": "", "closing_diff": 0, "sheet_count": 1, "insights": []}
+    try:
+        return json.loads(txt)
+    except json.JSONDecodeError:
+        # strip any stray backticks
+        txt = re.sub(r"```.*?```", "", txt, flags=re.DOTALL).strip()
+        return json.loads(txt)
+
+
+def _exec_excel_code(code: str) -> bytes:
+    """Run Claude's openpyxl code in a clean namespace; return excel_bytes."""
+    ns: dict[str, Any] = {}
+    exec(textwrap.dedent(code), ns)          # noqa: S102
+    excel_bytes = ns.get("excel_bytes")
+    if not isinstance(excel_bytes, bytes):
+        raise RuntimeError(
+            "Claude's code ran but did not produce `excel_bytes`. "
+            "Raw code:\n" + code[:400]
+        )
+    return excel_bytes
+
+
+# ---------------------------------------------------------------------------
+# Result dataclass
 # ---------------------------------------------------------------------------
 @dataclass
 class RecoResult:
-    data: dict[str, Any]
+    excel_bytes: bytes
+    summary: dict[str, Any]
     raw_response: str
     model_label: str
     input_tokens: int
@@ -138,8 +160,8 @@ class RecoResult:
 
     @property
     def cost_usd(self) -> float:
-        return (self.input_tokens * self.pricing.get("in_per_m", 0)
-                + self.output_tokens * self.pricing.get("out_per_m", 0)) / 1_000_000
+        return (self.input_tokens  * self.pricing.get("in_per_m",  0)
+              + self.output_tokens * self.pricing.get("out_per_m", 0)) / 1_000_000
 
     @property
     def cost_inr(self) -> float:
@@ -147,7 +169,7 @@ class RecoResult:
 
 
 # ---------------------------------------------------------------------------
-# Claude call
+# Main entry point
 # ---------------------------------------------------------------------------
 def run_reconciliation(
     file_a_bytes: bytes, file_a_name: str,
@@ -158,13 +180,13 @@ def run_reconciliation(
 ) -> RecoResult:
     api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY not set")
+        raise RuntimeError("ANTHROPIC_API_KEY is not set.")
 
     model = MODELS[model_label]
-
-    file_a_text = file_to_text(file_a_bytes, file_a_name)
-    file_b_text = file_to_text(file_b_bytes, file_b_name)
-    prompt = build_prompt(file_a_name, file_a_text, file_b_name, file_b_text)
+    prompt = build_prompt(
+        file_a_name, file_to_text(file_a_bytes, file_a_name),
+        file_b_name, file_to_text(file_b_bytes, file_b_name),
+    )
 
     client = Anthropic(api_key=api_key)
     msg = client.messages.create(
@@ -172,12 +194,15 @@ def run_reconciliation(
         max_tokens=MAX_OUTPUT_TOKENS,
         messages=[{"role": "user", "content": prompt}],
     )
-
     raw = "".join(b.text for b in msg.content if b.type == "text")
-    data = _parse_json(raw)
+
+    summary     = _parse_summary(raw)
+    excel_code  = _extract_tag(raw, "excel_code")
+    excel_bytes = _exec_excel_code(excel_code)
 
     return RecoResult(
-        data=data,
+        excel_bytes=excel_bytes,
+        summary=summary,
         raw_response=raw,
         model_label=model_label,
         input_tokens=msg.usage.input_tokens,
@@ -185,19 +210,3 @@ def run_reconciliation(
         usd_inr=usd_inr,
         pricing={"in_per_m": model["in_per_m"], "out_per_m": model["out_per_m"]},
     )
-
-
-def _parse_json(text: str) -> dict[str, Any]:
-    t = text.strip()
-    if t.startswith("```"):
-        t = t.split("\n", 1)[1] if "\n" in t else t
-        if t.endswith("```"):
-            t = t.rsplit("```", 1)[0]
-        t = t.strip()
-        if t.startswith("json"):
-            t = t[4:].lstrip()
-    if not t.startswith("{"):
-        i, j = t.find("{"), t.rfind("}")
-        if i != -1 and j != -1:
-            t = t[i:j + 1]
-    return json.loads(t)
