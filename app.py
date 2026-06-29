@@ -317,13 +317,13 @@ def _build_html(sheets, model_label, input_tokens, output_tokens, cost_inr, cost
         )
         sections_html += (
             '<div style="background:#FFFFFF;border:1px solid #E5E7EB;border-radius:14px;overflow:hidden;margin-bottom:10px">'
-            '<div onclick="tog('' + sid + '')" style="display:flex;align-items:center;gap:12px;padding:14px 18px;cursor:pointer;user-select:none;background:#FFFFFF">'
+            '<div onclick="var p=this.parentNode;var b=p.querySelector(\'.acc-body\');var c=this.querySelector(\'.acc-chev\');if(b.style.display===\'none\'){b.style.display=\'block\';c.innerHTML=\'&#8744;\';}else{b.style.display=\'none\';c.innerHTML=\'&#8250;\';}" style="display:flex;align-items:center;gap:12px;padding:14px 18px;cursor:pointer;user-select:none;background:#FFFFFF">'
             + icon_box +
             '<span style="font-size:14px;font-weight:600;color:#111827;flex:1">' + sh["name"] + '</span>'
             '<span style="font-size:12px;color:#9CA3AF;margin-right:10px">' + str(n_data) + ' ' + ("entry" if n_data==1 else "entries") + '</span>'
-            '<span id="chev_' + sid + '" style="font-size:20px;color:#9CA3AF;font-weight:300">' + ('&#8744;' if open_state else '&rsaquo;') + '</span>'
+            '<span class="acc-chev" style="font-size:22px;color:#9CA3AF;font-weight:300;flex-shrink:0">' + ('&#8744;' if open_state else '&#8250;') + '</span>'
             '</div>'
-            '<div id="' + sid + '" style="display:' + ('block' if open_state else 'none') + ';padding:0 18px 16px">'
+            '<div class="acc-body" style="display:' + ('block' if open_state else 'none') + ';padding:0 18px 16px">'
             + alert_html + table_html +
             '</div></div>'
         )
@@ -336,8 +336,7 @@ def _build_html(sheets, model_label, input_tokens, output_tokens, cost_inr, cost
         '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">' + pills + '</div>'
         + sections_html +
         '</div>'
-        '<script>function tog(id){var b=document.getElementById(id);var c=document.getElementById("chev_"+id);'
-        'if(b.style.display==="none"){b.style.display="block";c.innerHTML="&#8744;";}else{b.style.display="none";c.innerHTML="&rsaquo;";}</script>'
+        ''
     )
 
 if "result" in st.session_state:
