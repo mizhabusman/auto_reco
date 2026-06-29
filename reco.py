@@ -9,11 +9,13 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 import pandas as pd
 from anthropic import Anthropic
 from prompt import build_prompt
+from writer import sheets_to_excel
 
 # ---------------------------------------------------------------------------
 # Models
@@ -87,15 +89,49 @@ def _extract(text: str, tag: str) -> str:
 def _parse_sheets(raw: str) -> list[dict]:
     txt = _extract(raw, "sheets")
     if not txt:
-        return []
-    # strip any accidental code fences
-    txt = re.sub(r"^```[a-z]*\n?", "", txt.strip())
+        return [{"name": "Claude Response", "rows": [["Output"], [raw[:2000]]]}]
+
+    txt = re.sub(r"^```[a-zA-Z]*\n?", "", txt.strip())
     txt = re.sub(r"\n?```$", "", txt.strip())
-    return json.loads(txt)
+
+    # Attempt 1: parse as-is
+    try:
+        result = json.loads(txt)
+        if isinstance(result, list): return result
+    except json.JSONDecodeError:
+        pass
+
+    # Attempt 2: find outermost [ ... ]
+    try:
+        start, end = txt.find("["), txt.rfind("]")
+        if start != -1 and end != -1:
+            result = json.loads(txt[start:end+1])
+            if isinstance(result, list): return result
+    except json.JSONDecodeError:
+        pass
+
+    # Fallback: at least give the user something
+    return [{"name": "Raw Output", "rows": [["Claude Response"], [txt[:2000]]]}]
 
 # ---------------------------------------------------------------------------
 # Write Excel — pandas ExcelWriter, one sheet per item, no styling
 # ---------------------------------------------------------------------------
+def _parse_meta(raw: str, sheets: list) -> dict:
+    """Extract party names from summary text or first Summary sheet."""
+    meta = {"party_a": "", "party_b": "", "period": "", "prepared": datetime.now().strftime("%d %b %Y")}
+    # Try to get from first summary-like sheet
+    for sh in sheets:
+        if "summary" in sh.get("name","").lower():
+            for row in sh.get("rows", [])[1:]:
+                if len(row) >= 2:
+                    label = str(row[0]).lower()
+                    val   = str(row[1])
+                    if "party a" in label or "party a" in label: meta["party_a"] = val
+                    if "party b" in label:                         meta["party_b"] = val
+                    if "period"  in label:                         meta["period"]  = val
+            break
+    return meta
+
 def sheets_to_excel(sheets: list[dict]) -> bytes:
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
@@ -172,7 +208,8 @@ def run_reconciliation(
 
     summary = _extract(raw, "summary")
     sheets  = _parse_sheets(raw)
-    excel   = sheets_to_excel(sheets)
+    meta    = _parse_meta(raw, sheets)
+    excel   = sheets_to_excel(sheets, summary_text=summary, meta=meta)
 
     return RecoResult(
         excel_bytes=excel,
