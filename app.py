@@ -1,9 +1,6 @@
 """
-app.py — AI Ledger Reconciliation UI.
-Run: streamlit run app.py
-API key: set ANTHROPIC_API_KEY in Streamlit secrets or a .env file.
+app.py — UI. Upload → Run → Download. That's it.
 """
-
 from __future__ import annotations
 import os, traceback
 from datetime import datetime
@@ -23,14 +20,11 @@ USD_INR = DEFAULT_USD_INR
 
 st.set_page_config(page_title="Ledger Reconciliation", page_icon="📘", layout="centered")
 
-# ── Theme ───────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600&display=swap');
-:root{
-  --bg:#F3EEE7; --bg2:#FBF8F3; --card:#FFFFFF; --ink:#272220; --muted:#8C8379;
-  --accent:#B5793A; --accent-dk:#8C5C2B; --line:#EAE3D8;
-}
+:root{ --bg:#F3EEE7; --bg2:#FBF8F3; --card:#FFF; --ink:#272220; --muted:#8C8379;
+       --accent:#B5793A; --adk:#8C5C2B; --line:#EAE3D8; }
 header[data-testid="stHeader"],#MainMenu,footer,div[data-testid="stToolbar"],
 section[data-testid="stSidebar"]{ display:none !important; }
 .stApp{ background:radial-gradient(900px 420px at 50% -8%,var(--bg2) 0%,rgba(251,248,243,0) 70%),
@@ -40,84 +34,67 @@ html,body,[class*="css"]{ font-family:'Inter',sans-serif; color:var(--ink); }
 h1,h2,h3{ font-family:'Fraunces',serif !important; color:var(--ink); letter-spacing:-.015em; }
 div[data-testid="stVerticalBlock"]{ gap:.85rem; }
 
-/* header */
 .app-header{ text-align:center; margin-bottom:1.6rem; }
 .badge{ display:inline-flex; align-items:center; gap:6px; font-size:.7rem; font-weight:600;
-  letter-spacing:.14em; text-transform:uppercase; color:var(--accent-dk);
+  letter-spacing:.14em; text-transform:uppercase; color:var(--adk);
   background:rgba(181,121,58,.08); border:1px solid rgba(181,121,58,.22);
   border-radius:999px; padding:5px 14px; margin-bottom:14px; }
 .dot{ width:6px; height:6px; border-radius:50%; background:var(--accent); display:inline-block; }
-.app-header h1{ font-size:2.35rem; font-weight:600; margin:0; line-height:1.08; }
+.app-header h1{ font-size:2.35rem; font-weight:600; margin:0; }
 .app-header p{ color:var(--muted); margin:.55rem 0 0; font-size:1rem; }
 
-/* cards */
 div[data-testid="stVerticalBlockBorderWrapper"]{
   background:var(--card) !important; border:1px solid var(--line) !important;
   border-radius:18px; padding:1.4rem 1.5rem;
   box-shadow:0 1px 2px rgba(39,34,32,.04),0 12px 30px rgba(39,34,32,.05); }
 .card-h{ display:flex; align-items:center; gap:10px; margin-bottom:.4rem; }
-.num{ background:linear-gradient(135deg,var(--accent),var(--accent-dk)); color:#fff;
+.num{ background:linear-gradient(135deg,var(--accent),var(--adk)); color:#fff;
   width:26px; height:26px; border-radius:8px; display:inline-flex; align-items:center;
-  justify-content:center; font-size:.82rem; font-weight:600;
-  box-shadow:0 4px 10px rgba(181,121,58,.3); }
+  justify-content:center; font-size:.82rem; font-weight:600; box-shadow:0 4px 10px rgba(181,121,58,.3); }
 .card-t{ font-family:'Fraunces',serif; font-weight:600; font-size:1.12rem; }
 .card-sub{ color:var(--muted); font-size:.86rem; margin:-.1rem 0 .4rem 36px; }
+.summary-box{ background:var(--bg2); border:1px solid var(--line); border-radius:12px;
+  padding:14px 16px; font-size:.95rem; line-height:1.7; color:var(--ink); margin-bottom:.6rem; }
 
-/* uploaders */
 div[data-testid="stFileUploader"] section{
   background:var(--bg2); border:1.5px dashed var(--line); border-radius:12px; padding:.6rem .8rem; }
 div[data-testid="stFileUploader"] section:hover{ border-color:var(--accent); }
 
-/* model toggle */
 div[data-testid="stRadio"]{ width:100%; }
 div[data-testid="stRadio"] > div{ width:100%; }
 div[role="radiogroup"]{ display:flex; width:100%; gap:10px; flex-wrap:nowrap; }
-div[role="radiogroup"] > label{
-  flex:1 1 0; min-width:0; min-height:64px; box-sizing:border-box; overflow:hidden;
+div[role="radiogroup"] > label{ flex:1 1 0; min-width:0; min-height:64px; box-sizing:border-box;
   display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px;
-  background:var(--bg2); border:1.5px solid var(--line); border-radius:12px;
-  padding:8px 10px; margin:0 !important; cursor:pointer; transition:all .15s; }
+  background:var(--bg2); border:1.5px solid var(--line); border-radius:12px; padding:8px 10px;
+  margin:0 !important; cursor:pointer; transition:all .15s; }
 div[role="radiogroup"] > label > div:first-child{ display:none !important; }
 div[role="radiogroup"] > label div[data-testid="stMarkdownContainer"] p{
-  margin:0; white-space:nowrap; font-size:.98rem; font-weight:600;
-  color:var(--ink); text-align:center; }
+  margin:0; white-space:nowrap; font-size:.98rem; font-weight:600; color:var(--ink); text-align:center; }
 div[role="radiogroup"] > label div[data-testid="stCaptionContainer"] p{
-  margin:0; font-size:.72rem !important; font-weight:500;
-  color:var(--muted) !important; text-align:center; }
+  margin:0; font-size:.72rem !important; font-weight:500; color:var(--muted) !important; text-align:center; }
 div[role="radiogroup"] > label:hover{ border-color:var(--accent); background:#FCFAF6; }
-div[role="radiogroup"] > label:has(input:checked){
-  border-color:var(--accent); background:rgba(181,121,58,.09);
-  box-shadow:0 4px 14px rgba(181,121,58,.16); }
-div[role="radiogroup"] > label:has(input:checked) div[data-testid="stMarkdownContainer"] p{
-  color:var(--accent-dk); }
+div[role="radiogroup"] > label:has(input:checked){ border-color:var(--accent);
+  background:rgba(181,121,58,.09); box-shadow:0 4px 14px rgba(181,121,58,.16); }
+div[role="radiogroup"] > label:has(input:checked) div[data-testid="stMarkdownContainer"] p{ color:var(--adk); }
 
-/* buttons */
-.stButton>button{
-  background:linear-gradient(135deg,var(--accent),var(--accent-dk)); color:#fff;
+.stButton>button{ background:linear-gradient(135deg,var(--accent),var(--adk)); color:#fff;
   border:0; border-radius:13px; padding:.85rem 1.2rem; font-weight:600; font-size:.98rem;
   box-shadow:0 10px 24px rgba(181,121,58,.28); transition:transform .08s,filter .2s; }
 .stButton>button:hover:not(:disabled){ transform:translateY(-1px); filter:brightness(1.04); }
 .stButton>button:disabled{ background:#D6CDC0; box-shadow:none; }
-[data-testid="stDownloadButton"]>button{
-  background:var(--ink); color:#fff; border:0; border-radius:13px;
-  padding:.9rem 1.2rem; font-weight:600; width:100%;
+[data-testid="stDownloadButton"]>button{ background:var(--ink); color:#fff; border:0;
+  border-radius:13px; padding:.9rem 1.2rem; font-weight:600; width:100%;
   box-shadow:0 10px 24px rgba(39,34,32,.18); }
 [data-testid="stDownloadButton"]>button:hover{ background:#1c1815; }
 
-/* misc */
-div[data-testid="stMetric"]{ background:var(--bg2); border:1px solid var(--line);
-  border-radius:12px; padding:12px 14px; }
-div[data-testid="stMetricLabel"] p{ color:var(--muted); font-size:.78rem; font-weight:600; }
-div[data-testid="stMetricValue"]{ font-family:'Fraunces',serif; }
-.stExpander{ border:1px solid var(--line) !important; border-radius:12px !important; }
-.chip{ display:inline-block; background:var(--bg2); color:var(--accent-dk);
-  border:1px solid var(--line); border-radius:999px; padding:4px 12px;
-  font-size:.8rem; font-weight:600; margin:0 6px 6px 0; }
+.chip{ display:inline-block; background:var(--bg2); color:var(--adk); border:1px solid var(--line);
+  border-radius:999px; padding:4px 12px; font-size:.8rem; font-weight:600; margin:0 6px 6px 0; }
 .note{ color:var(--muted); font-size:.82rem; margin-top:.4rem; }
+.stExpander{ border:1px solid var(--line) !important; border-radius:12px !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── State ────────────────────────────────────────────────────────────────────
+# ── State ─────────────────────────────────────────────────────────────────────
 if "uploader_key" not in st.session_state:
     st.session_state["uploader_key"] = 0
 
@@ -125,21 +102,20 @@ def start_new():
     st.session_state.pop("result", None)
     st.session_state["uploader_key"] += 1
 
-# ── Loader animation ─────────────────────────────────────────────────────────
+# ── Loader ────────────────────────────────────────────────────────────────────
 def loader_html():
     return """
 <div style="font-family:'Inter',sans-serif;display:flex;flex-direction:column;align-items:center;
      justify-content:center;padding:36px 16px;background:#fff;border:1px solid #EAE3D8;
      border-radius:18px;box-shadow:0 12px 30px rgba(39,34,32,.06);">
   <div class="ring"></div>
-  <div id="ld" style="margin-top:20px;font-weight:600;color:#272220;font-size:1.02rem;
-       min-height:1.4em;">Reading the ledgers…</div>
+  <div id="ld" style="margin-top:20px;font-weight:600;color:#272220;font-size:1.02rem;min-height:1.4em;">Reading the ledgers…</div>
   <div style="margin-top:6px;color:#8C8379;font-size:.84rem;">Usually 30–90 seconds.</div>
   <div class="bar"><div class="fill"></div></div>
 </div>
 <style>
-.ring{width:58px;height:58px;border-radius:50%;border:5px solid #F0E7DA;
-  border-top-color:#B5793A;border-right-color:#D9A766;animation:spin 1s linear infinite;}
+.ring{width:58px;height:58px;border-radius:50%;border:5px solid #F0E7DA;border-top-color:#B5793A;
+  border-right-color:#D9A766;animation:spin 1s linear infinite;}
 @keyframes spin{to{transform:rotate(360deg);}}
 .bar{width:240px;height:6px;background:#F0E7DA;border-radius:99px;margin-top:22px;overflow:hidden;}
 .fill{height:100%;width:40%;border-radius:99px;background:linear-gradient(90deg,#B5793A,#D9A766);
@@ -148,13 +124,12 @@ def loader_html():
 </style>
 <script>
 const m=["Reading the ledgers…","Understanding both books…","Matching invoices…",
-"Checking TDS differences…","Spotting unmatched entries…","Building the Excel report…",
-"Finalising observations…"];
+"Checking TDS differences…","Spotting unmatched entries…","Building the report…","Almost done…"];
 let i=0;const e=document.getElementById('ld');
 setInterval(()=>{i=(i+1)%m.length;if(e)e.textContent=m[i];},2600);
 </script>"""
 
-# ── Header ───────────────────────────────────────────────────────────────────
+# ── Header ────────────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="app-header">
   <span class="badge"><span class="dot"></span>AI-Powered</span>
@@ -162,41 +137,29 @@ st.markdown("""
   <p>Upload two ledgers — Claude reconciles and returns a ready Excel report.</p>
 </div>""", unsafe_allow_html=True)
 
-# ── Results view ─────────────────────────────────────────────────────────────
+# ── Results view ──────────────────────────────────────────────────────────────
 if "result" in st.session_state:
     r = st.session_state["result"]
-    s = r.summary
 
     with st.container(border=True):
         st.markdown('<div class="card-h"><span class="num">✓</span>'
-                    '<span class="card-t">Reconciliation ready</span></div>',
+                    '<span class="card-t">Reconciliation complete</span></div>',
                     unsafe_allow_html=True)
 
-        # Party info
-        pa, pb = s.get("party_a","Party A"), s.get("party_b","Party B")
-        period  = s.get("period","")
-        st.markdown(f'<div class="card-sub">{pa} &nbsp;↔&nbsp; {pb}'
-                    f'{" · " + period if period else ""}</div>',
-                    unsafe_allow_html=True)
+        # CA's plain-English summary
+        if r.summary:
+            st.markdown(f'<div class="summary-box">{r.summary}</div>',
+                        unsafe_allow_html=True)
 
-        # Closing balance difference
-        diff = s.get("closing_diff", 0)
-        diff_str = f"₹ {abs(diff):,.2f}" if isinstance(diff,(int,float)) else str(diff)
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Closing Balance Difference", diff_str,
-                      delta="Balanced ✓" if diff == 0 else None)
-        with col2:
-            st.metric("Sheets in Report", s.get("sheet_count", "—"))
+        # Sheet count chips
+        if r.sheets:
+            st.markdown(
+                " ".join(f'<span class="chip">📄 {sh["name"]} '
+                         f'({max(0, len(sh.get("rows",[])) - 1)} rows)</span>'
+                         for sh in r.sheets),
+                unsafe_allow_html=True)
 
-        # Insights
-        insights = s.get("insights", [])
-        if insights:
-            with st.expander("💡 Key Observations", expanded=True):
-                for obs in insights:
-                    st.markdown(f"- {obs}")
-
-        # Cost chips
+        # Cost
         st.markdown(
             f'<div style="margin:.6rem 0">'
             f'<span class="chip">{r.model_label.split(" (")[0]}</span>'
@@ -205,19 +168,18 @@ if "result" in st.session_state:
             f'</div>', unsafe_allow_html=True)
 
         # Download
-        fname = (f"Reco_{pa}_vs_{pb}_{datetime.now():%Y%m%d_%H%M}.xlsx"
-                 .replace(" ","_"))
+        pa = r.sheets[0]["rows"][1][1] if r.sheets and len(r.sheets[0].get("rows",[])) > 1 else "A"
+        fname = f"Reco_{datetime.now():%Y%m%d_%H%M}.xlsx"
         st.download_button(
             "⬇️  Download Reconciliation Report (.xlsx)",
             data=r.excel_bytes, file_name=fname,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True)
 
-    with st.expander("🔍 Raw Claude response (debug)"):
+    with st.expander("🔍 Raw Claude response"):
         st.text(r.raw_response[:6000] + ("…" if len(r.raw_response) > 6000 else ""))
 
-    st.button("↺  Start a New Reconciliation", on_click=start_new,
-              use_container_width=True)
+    st.button("↺  Start a New Reconciliation", on_click=start_new, use_container_width=True)
     st.stop()
 
 # ── Form view ─────────────────────────────────────────────────────────────────
@@ -225,10 +187,8 @@ uk = st.session_state["uploader_key"]
 
 with st.container(border=True):
     st.markdown('<div class="card-h"><span class="num">1</span>'
-                '<span class="card-t">Upload the two ledgers</span></div>',
-                unsafe_allow_html=True)
-    st.markdown('<div class="card-sub">Both parties\' books — Excel or CSV</div>',
-                unsafe_allow_html=True)
+                '<span class="card-t">Upload the two ledgers</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="card-sub">Both parties\' books — Excel or CSV</div>', unsafe_allow_html=True)
     c1, c2 = st.columns(2)
     with c1:
         file_a = st.file_uploader("Ledger A", type=["xls","xlsx","xlsm","csv"], key=f"a{uk}")
@@ -237,24 +197,21 @@ with st.container(border=True):
 
 with st.container(border=True):
     st.markdown('<div class="card-h"><span class="num">2</span>'
-                '<span class="card-t">Choose model & run</span></div>',
-                unsafe_allow_html=True)
+                '<span class="card-t">Choose model & run</span></div>', unsafe_allow_html=True)
     choice = st.radio("Model", MODEL_NAMES, captions=MODEL_CAPTIONS,
-                      index=DEFAULT_INDEX, horizontal=True,
-                      label_visibility="collapsed")
+                      index=DEFAULT_INDEX, horizontal=True, label_visibility="collapsed")
     model_label = NAME_TO_LABEL[choice]
     run_btn = st.button("✨  Run Reconciliation", type="primary",
                         disabled=not (file_a and file_b and API_KEY),
                         use_container_width=True)
     if not API_KEY:
-        st.markdown('<div class="note">⚠️ Set <b>ANTHROPIC_API_KEY</b> in Streamlit secrets '
-                    'or a <code>.env</code> file.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="note">⚠️ Set <b>ANTHROPIC_API_KEY</b> in Streamlit secrets.</div>',
+                    unsafe_allow_html=True)
 
 # ── Run ───────────────────────────────────────────────────────────────────────
 if run_btn:
     slot = st.empty()
-    with slot:
-        components.html(loader_html(), height=270)
+    with slot: components.html(loader_html(), height=270)
     try:
         result = run_reconciliation(
             file_a.getvalue(), file_a.name,
@@ -266,6 +223,6 @@ if run_btn:
         st.rerun()
     except Exception as e:
         slot.empty()
-        st.error(f"Reconciliation failed: {e}")
-        with st.expander("Technical details"):
+        st.error(f"Something went wrong: {e}")
+        with st.expander("Details"):
             st.code(traceback.format_exc())

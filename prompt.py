@@ -1,17 +1,11 @@
 """
-prompt.py — The entire brain of the reconciliation.
-
-Edit this file to change how Claude reconciles, what the Excel looks like,
-what summary info is shown on screen, or how matching works.
-Nothing else needs to change.
+prompt.py — The only thing that matters. Edit this to change how the reco works.
 """
 
 RECO_PROMPT = """
-You are a senior Chartered Accountant. I am giving you two ledger exports from
-two companies for the same counterparty relationship.
+You are a senior Chartered Accountant. I have uploaded two ledger files for the same counterparty relationship.
 
-Your job: perform a complete, professional reconciliation and produce a
-downloadable Excel report in whatever format you think is best for this data.
+Reconcile them completely — like you would in real CA practice. Figure out the structure yourself, match entries, find differences, and tell me everything.
 
 ===== LEDGER A: {file_a_name} =====
 {file_a_content}
@@ -21,60 +15,64 @@ downloadable Excel report in whatever format you think is best for this data.
 {file_b_content}
 ===== END LEDGER B =====
 
-============================================================
-WHAT TO DO
-============================================================
-1. Figure out the structure of each ledger yourself — ignore company-name
-   junk rows at the top, find the real header row, identify date/voucher/
-   amount/invoice columns by reading the content.
-
-2. Reconcile like a CA would:
-   - Ledgers are mirrors: a sale in one = purchase in the other.
-   - Match on invoice/bill number (fuzzy — "25-26/GS-140" = "GS-140").
-   - One side may book gross, the other net of TDS — treat as a match.
-   - Flag amount differences, timing differences, entries only in one book.
-   - Compute opening/closing balances and the difference between the two books.
-
-3. Write Python code (using openpyxl) that creates a professional Excel
-   reconciliation report. You decide the sheets, columns, colors and layout —
-   whatever communicates the reconciliation most clearly. The code must:
-   - import openpyxl and any stdlib modules it needs (no other libraries)
-   - end with:  excel_bytes = <io.BytesIO with the saved workbook>.getvalue()
-   - NOT call wb.save() to a file path — only save to a BytesIO buffer.
-
-4. Write a short summary of the reconciliation for display on screen.
-
-============================================================
-RESPONSE FORMAT — return EXACTLY this, nothing else:
-============================================================
+Return your answer in this exact format — nothing before or after:
 
 <summary>
-{{
-  "party_a": "name of party A",
-  "party_b": "name of party B",
-  "period": "date range",
-  "closing_diff": <number — difference between closing balances, 0 if matched>,
-  "sheet_count": <number of sheets in your Excel>,
-  "insights": [
-    "specific finding 1 — name invoice numbers and amounts",
-    "specific finding 2",
-    "specific finding 3"
-  ]
-}}
+Write 4-6 plain English sentences summarising the reconciliation. Name the parties, state the period, mention the closing balance difference, and call out the most important findings (unmatched invoices, TDS differences, etc.).
 </summary>
 
-<excel_code>
-# your complete, runnable Python code here
-# must end with: excel_bytes = buf.getvalue()
-</excel_code>
+<sheets>
+[
+  {{
+    "name": "Summary",
+    "rows": [
+      ["Party A", "Techsmith Software Pvt Ltd"],
+      ["Party B", "BigC Mobiles Pvt Ltd"],
+      ["Period", "Apr 2025 – Jun 2026"],
+      ["Closing Balance Diff", -81557.52],
+      ["Total Matched", 3],
+      ["Total Unmatched", 2]
+    ]
+  }},
+  {{
+    "name": "Matched Entries",
+    "rows": [
+      ["Invoice No", "Date (A)", "Date (B)", "Amount", "Narration"],
+      ["INV-001", "24-Apr-2025", "24-Apr-2025", 1725384, "HDFC NEFT payment"]
+    ]
+  }},
+  {{
+    "name": "Differences",
+    "rows": [
+      ["Invoice No", "Amount (A)", "Amount (B)", "Difference", "Reason"],
+      ["GS-140", 1694893, 1666166, 28727, "TDS deducted by Party B"]
+    ]
+  }},
+  {{
+    "name": "Only in A",
+    "rows": [
+      ["Date", "Voucher", "Invoice", "Debit", "Credit", "Narration"],
+      ["25-Apr-2025", "JV-986", "", 0.84, 0, "Round off"]
+    ]
+  }},
+  {{
+    "name": "Only in B",
+    "rows": [
+      ["Date", "Voucher", "Invoice", "Debit", "Credit", "Narration"],
+      ["01-Mar-2026", "TCV-6206", "GS-211", 0, 29206.18, "IT Consultancy"]
+    ]
+  }}
+]
+</sheets>
 
 Rules:
-- Return ONLY the two tagged blocks above. No prose before or after.
-- The JSON inside <summary> must be valid JSON.
-- The code inside <excel_code> must run without errors using only
-  openpyxl and Python stdlib (io, datetime, etc.).
-- Sheet names must not contain / \\ ? * [ ] or : (use - instead).
-- All monetary values in the Excel should be numbers, not strings.
+- The example above shows the FORMAT only. Use whatever sheets and columns make sense for this actual data.
+- You decide how many sheets, what to name them, what columns to include.
+- First row of every sheet must be the column headers.
+- All monetary values must be plain numbers (no ₹ symbol, no commas). Dates as strings.
+- Sheet names: no special characters / \\ ? * [ ] :
+- The JSON inside <sheets> must be valid JSON.
+- The <summary> is plain text only, no JSON.
 """
 
 
