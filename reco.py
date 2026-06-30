@@ -15,7 +15,7 @@ from typing import Any
 import pandas as pd
 from anthropic import Anthropic
 from prompt import build_prompt
-from writer import sheets_to_excel
+from writer import reco_to_excel
 
 # ---------------------------------------------------------------------------
 # Models
@@ -86,51 +86,34 @@ def _extract(text: str, tag: str) -> str:
     m = re.search(rf"<{tag}>(.*?)</{tag}>", text, re.DOTALL)
     return m.group(1).strip() if m else ""
 
-def _parse_sheets(raw: str) -> list[dict]:
-    txt = _extract(raw, "sheets")
+def _parse_reco(raw: str) -> dict:
+    """Parse the <reco>...</reco> JSON block. Robust to fences/whitespace."""
+    txt = _extract(raw, "reco")
     if not txt:
-        return [{"name": "Claude Response", "rows": [["Output"], [raw[:2000]]]}]
+        return {"stats": {}, "balances": {}, "tds": {}, "matched": [],
+                "amount_mismatches": [], "missing_their_books": [],
+                "missing_our_books": [], "timing_differences": []}
 
     txt = re.sub(r"^```[a-zA-Z]*\n?", "", txt.strip())
     txt = re.sub(r"\n?```$", "", txt.strip())
 
-    # Attempt 1: parse as-is
     try:
-        result = json.loads(txt)
-        if isinstance(result, list): return result
+        return json.loads(txt)
     except json.JSONDecodeError:
-        pass
-
-    # Attempt 2: find outermost [ ... ]
-    try:
-        start, end = txt.find("["), txt.rfind("]")
+        start, end = txt.find("{"), txt.rfind("}")
         if start != -1 and end != -1:
-            result = json.loads(txt[start:end+1])
-            if isinstance(result, list): return result
-    except json.JSONDecodeError:
-        pass
-
-    # Fallback: at least give the user something
-    return [{"name": "Raw Output", "rows": [["Claude Response"], [txt[:2000]]]}]
+            try:
+                return json.loads(txt[start:end+1])
+            except json.JSONDecodeError:
+                pass
+    # last resort: empty skeleton
+    return {"stats": {}, "balances": {}, "tds": {}, "matched": [],
+            "amount_mismatches": [], "missing_their_books": [],
+            "missing_our_books": [], "timing_differences": []}
 
 # ---------------------------------------------------------------------------
 # Write Excel — pandas ExcelWriter, one sheet per item, no styling
 # ---------------------------------------------------------------------------
-def _parse_meta(raw: str, sheets: list) -> dict:
-    """Extract party names from summary text or first Summary sheet."""
-    meta = {"party_a": "", "party_b": "", "period": "", "prepared": datetime.now().strftime("%d %b %Y")}
-    # Try to get from first summary-like sheet
-    for sh in sheets:
-        if "summary" in sh.get("name","").lower():
-            for row in sh.get("rows", [])[1:]:
-                if len(row) >= 2:
-                    label = str(row[0]).lower()
-                    val   = str(row[1])
-                    if "party a" in label or "party a" in label: meta["party_a"] = val
-                    if "party b" in label:                         meta["party_b"] = val
-                    if "period"  in label:                         meta["period"]  = val
-            break
-    return meta
 
 # ---------------------------------------------------------------------------
 # Result
@@ -184,15 +167,14 @@ def run_reconciliation(
     )
     raw = "".join(b.text for b in msg.content if b.type == "text")
 
-    summary = _extract(raw, "summary")
-    sheets  = _parse_sheets(raw)
-    meta    = _parse_meta(raw, sheets)
-    excel   = sheets_to_excel(sheets, summary_text=summary, meta=meta)
+    summary    = _extract(raw, "summary")
+    reco_data  = _parse_reco(raw)
+    excel      = reco_to_excel(reco_data)
 
     return RecoResult(
         excel_bytes=excel,
         summary=summary,
-        sheets=sheets,
+        sheets=reco_data,
         raw_response=raw,
         model_label=model_label,
         input_tokens=msg.usage.input_tokens,

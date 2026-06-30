@@ -1,6 +1,10 @@
 """
-writer.py — Professional Excel formatter for reconciliation reports.
-Claude returns the data. This makes it beautiful.
+writer.py — Renders the 7-sheet reconciliation report exactly matching
+the example template (Summary / TDS Reconciliation / Matched / Amount
+Mismatches / Missing in Their Books / Missing in Our Books / Timing Differences).
+
+Styling: Excel-classic — deep blue title #1F4E78, amber alert #FFEB9C,
+Calibri body, white table headers on blue.
 """
 from __future__ import annotations
 import io
@@ -9,333 +13,378 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
 # ── Palette ───────────────────────────────────────────────────────────────────
-F = "Arial"
+BLUE       = "1F4E78"
+LIGHT_BLUE = "DDEBF7"
+AMBER_BG   = "FFEB9C"   # warning yellow
+AMBER_FG   = "9C5700"
+GREEN_BG   = "C6EFCE"   # excel good
+GREEN_FG   = "006100"
+RED_BG     = "FFC7CE"   # excel bad
+RED_FG     = "9C0006"
+BORDER_GREY = "BFBFBF"
 
-# Warm professional palette
-C = {
-    "title_bg":   "1C1916",
-    "title_fg":   "FFFFFF",
-    "hdr_bg":     "3C3530",
-    "hdr_fg":     "FFFFFF",
-    "total_bg":   "2B2622",
-    "total_fg":   "FFFFFF",
-    "accent":     "B5793A",  # amber
-    "green":      "2D6A4F",
-    "red":        "9B2226",
-    "orange":     "CA6702",
-    "purple":     "5E548E",
-    "blue":       "1D6FA4",
-    "slate":      "495867",
-    "z1":         "FFFFFF",
-    "z2":         "F7F3EE",
-    "cover_bg":   "FAF7F2",
-    "line":       "DDD5C8",
-}
+NUM_FMT  = '#,##0.00;[Red](#,##0.00);"-"'
+INT_FMT  = '#,##0'
 
-# tone → accent colour for tab + header strip
-TONE = {
-    "summary":  C["accent"],
-    "matched":  C["green"],
-    "diff":     C["red"],
-    "tds":      C["orange"],
-    "onlya":    C["purple"],
-    "onlyb":    C["blue"],
-    "other":    C["slate"],
-}
+def _f(hex6):
+    return PatternFill("solid", start_color=hex6, end_color=hex6)
 
-NUM_FMT  = '#,##0.00;(#,##0.00);"-"'
-INT_FMT  = '#,##0;(#,##0);"-"'
-DATE_FMT = "DD-MMM-YYYY"
+def _font(size=11, bold=False, color=None, italic=False):
+    kw = dict(name="Calibri", size=size, bold=bold, italic=italic)
+    if color: kw["color"] = color
+    return Font(**kw)
 
-def _f(hex6): return PatternFill("solid", start_color=hex6, end_color=hex6)
-def _c(bold=False, color="000000", size=10, italic=False):
-    return Font(name=F, bold=bold, color=color, size=size, italic=italic)
-def _b(color=C["line"]):
-    s = Side(border_style="thin", color=color)
+def _thin():
+    s = Side(style="thin", color=BORDER_GREY)
     return Border(left=s, right=s, top=s, bottom=s)
-def _a(h="left", v="center", wrap=False):
+
+def _align(h="left", v="center", wrap=False):
     return Alignment(horizontal=h, vertical=v, wrap_text=wrap)
 
-def _tone(name):
-    n = name.lower()
-    if any(k in n for k in ("summary","overview","dashboard","reconciliation summary")): return "summary"
-    if any(k in n for k in ("matched","match","agree","payment","invoice","credit note")): return "matched"
-    if any(k in n for k in ("diff","mismatch","discrepan","issue","varianc","key diff")): return "diff"
-    if any(k in n for k in ("tds","tax","withhold")): return "tds"
-    if any(k in n for k in ("only in a","only a","missing b","unmatched a")): return "onlya"
-    if any(k in n for k in ("only in b","only b","missing a","unmatched b")): return "onlyb"
-    return "other"
+# ── Common helpers ────────────────────────────────────────────────────────────
+def _title(ws, row, text, span=1):
+    """Big section title — size 16 bold dark blue."""
+    if span > 1:
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=span)
+    c = ws.cell(row, 1, text)
+    c.font = _font(size=16, bold=True, color=BLUE)
+    ws.row_dimensions[row].height = 24
 
-def _is_num(v):
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+def _section(ws, row, text, span=1):
+    """Sub-section header — size 12 bold."""
+    if span > 1:
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=span)
+    c = ws.cell(row, 1, text)
+    c.font = _font(size=12, bold=True)
+    ws.row_dimensions[row].height = 20
 
-def _coerce(v):
-    if isinstance(v, str):
-        s = v.replace(",","").replace("₹","").replace("$","").strip()
-        if s in ("-",""):  return v
-        try:    return int(s) if "." not in s else float(s)
-        except: return v
-    return v
+def _banner(ws, row, text, kind="warn", span=7):
+    """Coloured alert banner row."""
+    bg, fg = (AMBER_BG, AMBER_FG) if kind == "warn" else \
+             (GREEN_BG, GREEN_FG) if kind == "good" else \
+             (RED_BG, RED_FG)
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=span)
+    c = ws.cell(row, 1, text)
+    c.font = _font(size=12, bold=True, color=fg)
+    c.fill = _f(bg)
+    c.alignment = _align(h="left", wrap=True)
+    ws.row_dimensions[row].height = 30
 
-def _autowidth(ws, min_w=10, max_w=48):
-    for ci in range(1, ws.max_column + 1):
-        col = get_column_letter(ci)
-        best = min_w
-        for ri in range(1, ws.max_row + 1):
-            cell = ws.cell(ri, ci)
-            if cell.__class__.__name__ == "MergedCell" or cell.value is None: continue
-            best = max(best, min(len(str(cell.value)) + 3, max_w))
-        ws.column_dimensions[col].width = best
-
-# ── Cover sheet ───────────────────────────────────────────────────────────────
-def _cover(wb, sheets, meta):
-    ws = wb.create_sheet("📋 Report", 0)
-    ws.sheet_view.showGridLines = False
-    ws.sheet_properties.tabColor = C["accent"]
-    ws.column_dimensions["A"].width = 32
-    ws.column_dimensions["B"].width = 18
-    ws.column_dimensions["C"].width = 42
-
-    # Title
-    ws.merge_cells("A1:C1")
-    t = ws["A1"]
-    t.value = "LEDGER RECONCILIATION REPORT"
-    t.font  = Font(name=F, size=16, bold=True, color=C["title_fg"])
-    t.fill  = _f(C["title_bg"])
-    t.alignment = _a("center","center")
-    ws.row_dimensions[1].height = 40
-
-    # Amber accent strip
-    for c in "ABC":
-        ws[f"{c}2"].fill = _f(C["accent"])
-    ws.row_dimensions[2].height = 5
-
-    # Meta info
-    r = 4
-    for label, key in [("Party A","party_a"),("Party B","party_b"),
-                        ("Period","period"),("Prepared","prepared")]:
-        val = meta.get(key,"")
-        if not val: continue
-        lc = ws.cell(r, 1, label)
-        vc = ws.cell(r, 2, val)
-        lc.font = _c(bold=True, color=C["accent"])
-        vc.font = _c(color=C["title_bg"])
-        ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=3)
-        ws.row_dimensions[r].height = 18
-        r += 1
-    r += 1
-
-    # Contents table header
-    for ci, (col, label) in enumerate([(1,"Sheet"),(2,"Rows"),(3,"Category")], 1):
-        c = ws.cell(r, ci, label)
-        c.font  = _c(bold=True, color=C["hdr_fg"])
-        c.fill  = _f(C["hdr_bg"])
-        c.alignment = _a("center")
-        c.border = _b()
-    ws.row_dimensions[r].height = 22
-    r += 1
-
-    CATS = {
-        "summary": "Key figures & totals",
-        "matched": "Transactions matched in both books",
-        "diff":    "Differences & discrepancies",
-        "tds":     "TDS / tax-adjusted entries",
-        "onlya":   "Only in Party A's books",
-        "onlyb":   "Only in Party B's books",
-        "other":   "Additional details",
-    }
-    for i, sh in enumerate(sheets):
-        tone = _tone(sh["name"])
-        color = TONE[tone]
-        n_rows = max(0, len(sh.get("rows",[])) - 1)
-        c1 = ws.cell(r, 1, sh["name"])
-        c2 = ws.cell(r, 2, n_rows)
-        c3 = ws.cell(r, 3, CATS.get(tone,""))
-        c1.font = _c(bold=True, color=color)
-        c2.font = _c(); c2.alignment = _a("center")
-        c3.font = _c(italic=True, color="6D6560")
-        for c in (c1,c2,c3): c.border = _b()
-        if i % 2 == 0:
-            for ci in range(1,4): ws.cell(r,ci).fill = _f(C["z2"])
-        ws.row_dimensions[r].height = 17
-        r += 1
-
-# ── Data sheet ────────────────────────────────────────────────────────────────
-def _sheet(wb, sh):
-    rows = sh.get("rows", [])
-    if not rows: return
-
-    name  = sh["name"]
-    tone  = _tone(name)
-    color = TONE[tone]
-
-    ws = wb.create_sheet(name)
-    ws.sheet_view.showGridLines = False
-    ws.sheet_properties.tabColor = color
-
-    headers = [str(h) for h in rows[0]]
-    data    = rows[1:]
-    ncols   = len(headers)
-
-    # ── Title bar ──
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncols)
-    t = ws["A1"]
-    t.value     = name.upper()
-    t.font      = Font(name=F, size=13, bold=True, color=C["title_fg"])
-    t.fill      = _f(C["title_bg"])
-    t.alignment = _a("center","center")
-    ws.row_dimensions[1].height = 32
-
-    # ── Colour accent strip ──
-    for ci in range(1, ncols+1):
-        ws.cell(2, ci).fill = _f(color)
-    ws.row_dimensions[2].height = 5
-
-    # ── Header row ──
-    HR = 3
+def _table_header(ws, row, headers):
+    """White-on-blue table header row."""
     for ci, h in enumerate(headers, 1):
-        c = ws.cell(HR, ci, h)
-        c.font      = _c(bold=True, color=C["hdr_fg"], size=10)
-        c.fill      = _f(C["hdr_bg"])
-        c.alignment = _a("center","center", wrap=True)
-        c.border    = _b("AAAAAA")
-    ws.row_dimensions[HR].height = 26
-    ws.freeze_panes = ws.cell(HR+1, 1)
+        c = ws.cell(row, ci, h)
+        c.font = _font(bold=True, color="FFFFFF")
+        c.fill = _f(BLUE)
+        c.alignment = _align(h="center")
+        c.border = _thin()
+    ws.row_dimensions[row].height = 20
 
-    # ── Detect numeric columns from header keywords ──
-    num_kw = ("amount","debit","credit","balance","tds","total","variance",
-              "diff","impact","payment","invoice","seq","value","qty")
-    def is_num_col(h):
-        return any(k in h.lower() for k in num_kw)
+def _write_row(ws, row, values, num_cols=None):
+    """Write a data row with thin borders, currency format on numeric cols."""
+    num_cols = num_cols or set()
+    for ci, v in enumerate(values, 1):
+        c = ws.cell(row, ci, v)
+        c.font = _font()
+        c.border = _thin()
+        if ci in num_cols or isinstance(v, (int, float)) and not isinstance(v, bool):
+            c.number_format = NUM_FMT
+            c.alignment = _align(h="right")
+            if isinstance(v, (int, float)) and v < 0:
+                c.font = _font(color="9C0006")
+        else:
+            c.alignment = _align(h="left")
 
-    # ── Data rows ──
-    num_cols = set()
-    for ri, row in enumerate(data):
-        er  = HR + 1 + ri
-        bg  = C["z1"] if ri % 2 == 0 else C["z2"]
-        pad = list(row) + [""] * max(0, ncols - len(row))
+def _set_cols(ws, widths):
+    """widths = {'A': 45, 'B': 22, ...}"""
+    for col, w in widths.items():
+        ws.column_dimensions[col].width = w
 
-        for ci, raw in enumerate(pad[:ncols], 1):
-            val = _coerce(raw)
-            c   = ws.cell(er, ci, val)
-            c.fill   = _f(bg)
-            c.border = _b()
-            c.font   = _c(size=10)
-
-            if _is_num(val):
-                num_cols.add(ci)
-                fmt = INT_FMT if isinstance(val, int) else NUM_FMT
-                c.number_format = fmt
-                c.alignment = _a("right")
-                # colour negative values red
-                if val < 0:
-                    c.font = _c(color=C["red"], size=10)
-            else:
-                c.alignment = _a("left", wrap=True)
-                # status/risk colouring
-                sv = str(val).strip().upper()
-                if sv in ("MATCHED","CLEAR","LOW"):
-                    c.font = _c(bold=True, color=C["green"])
-                elif sv in ("UNRESOLVED","HIGH"):
-                    c.font = _c(bold=True, color=C["red"])
-                elif sv in ("MINOR","MEDIUM","ACCEPTABLE","SUBSTANTIALLY RECONCILED"):
-                    c.font = _c(bold=True, color=C["orange"])
-
-    # ── Totals row (SUM formula — only numeric cols, only if data exists) ──
-    if data and num_cols:
-        tr = HR + 1 + len(data)
-        # Merge non-numeric leading columns as "TOTAL" label
-        first_num = min(num_cols)
-        if first_num > 1:
-            ws.merge_cells(start_row=tr, start_column=1,
-                           end_row=tr, end_column=first_num - 1)
-        label = ws.cell(tr, 1, "TOTAL")
-        label.font      = _c(bold=True, color=C["total_fg"])
-        label.fill      = _f(C["total_bg"])
-        label.alignment = _a("right")
-        label.border    = _b()
-
-        first_data = HR + 1
-        last_data  = HR + len(data)
-        for ci in range(1, ncols+1):
-            c = ws.cell(tr, ci)
-            if ci in num_cols:
-                col_l = get_column_letter(ci)
-                # Use Excel SUM formula — calculated by Excel, not Python
-                c.value         = f"=SUM({col_l}{first_data}:{col_l}{last_data})"
-                c.number_format = NUM_FMT
-                c.font          = _c(bold=True, color=C["total_fg"])
-                c.fill          = _f(C["total_bg"])
-                c.alignment     = _a("right")
-                c.border        = _b()
-            elif ci > 1:
-                c.fill   = _f(C["total_bg"])
-                c.border = _b()
-
-    # ── Empty placeholder ──
-    if not data:
-        ws.merge_cells(start_row=HR+1, start_column=1, end_row=HR+1, end_column=ncols)
-        ec = ws.cell(HR+1, 1, "— No entries in this category —")
-        ec.font      = _c(italic=True, color="9E9590")
-        ec.alignment = _a("center")
-
-    _autowidth(ws)
-
-# ── Notes sheet ───────────────────────────────────────────────────────────────
-def _notes(wb, summary_text):
-    ws = wb.create_sheet("📝 Notes")
+# ── Sheet 1: Summary ──────────────────────────────────────────────────────────
+def _summary_sheet(wb, data):
+    ws = wb.create_sheet("Summary")
     ws.sheet_view.showGridLines = False
-    ws.sheet_properties.tabColor = C["slate"]
+    _set_cols(ws, {"A": 50, "B": 22, "C": 22, "D": 22})
 
-    ws.merge_cells("A1:E1")
-    t = ws["A1"]
-    t.value     = "RECONCILIATION NOTES"
-    t.font      = Font(name=F, size=13, bold=True, color=C["title_fg"])
-    t.fill      = _f(C["title_bg"])
-    t.alignment = _a("center","center")
-    ws.row_dimensions[1].height = 32
+    _title(ws, 1, "Reconciliation Summary", span=4)
 
-    for c in "ABCDE": ws[f"{c}2"].fill = _f(C["slate"])
-    ws.row_dimensions[2].height = 5
+    stats = data.get("stats", {})
+    bal   = data.get("balances", {})
 
-    ws.cell(4, 1, "Summary prepared by AI Reconciliation Assistant"
-            ).font = _c(bold=True, color=C["accent"])
+    # Match Statistics block
+    _section(ws, 3, "Match Statistics", span=4)
+    stat_rows = [
+        ("Total records (Our books)",                stats.get("total_ours", 0)),
+        ("Total records (Their books)",              stats.get("total_theirs", 0)),
+        ("L1 matches (Date + Ref + Amount)",         stats.get("l1_matches", 0)),
+        ("L2 matches (Ref + Amount, dates differ)",  stats.get("l2_matches", 0)),
+        ("L3 matches (Date + Amount, weak)",         stats.get("l3_matches", 0)),
+        ("Amount mismatches",                         stats.get("amount_mismatches", 0)),
+        ("Missing in their books",                    stats.get("missing_their_books", 0)),
+        ("Missing in our books",                      stats.get("missing_our_books", 0)),
+        ("TDS journal entries (see TDS Reconciliation sheet)", stats.get("tds_journal_entries", 0)),
+    ]
+    r = 4
+    for label, val in stat_rows:
+        ws.cell(r, 1, label).font = _font()
+        c = ws.cell(r, 2, val)
+        c.font = _font(bold=True); c.alignment = _align(h="right")
+        c.number_format = INT_FMT
+        r += 1
+    r += 1   # blank
 
-    r = 6
-    for line in summary_text.strip().splitlines():
-        line = line.strip()
-        if not line: continue
-        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=5)
-        c = ws.cell(r, 1, line)
-        c.font      = _c(size=10)
-        c.alignment = _a("left","top", wrap=True)
-        ws.row_dimensions[r].height = max(18, 13 * (1 + len(line)//90))
+    # Closing Balance Walk block
+    _section(ws, r, "Closing Balance Walk", span=4); r += 1
+    walk_rows = [
+        ("Opening Balance (Ours)",      bal.get("opening_ours", 0)),
+        ("+ Sum of our transactions",   bal.get("sum_ours", 0)),
+        ("= Closing Balance (Ours)",    bal.get("closing_ours", 0)),
+        (None, None),
+        ("Opening Balance (Theirs)",    bal.get("opening_theirs", 0)),
+        ("+ Sum of their transactions", bal.get("sum_theirs", 0)),
+        ("= Closing Balance (Theirs)",  bal.get("closing_theirs", 0)),
+        (None, None),
+        ("Difference (Ours − Theirs)",  bal.get("difference", 0)),
+        ("Reconciling items (one-sided)", bal.get("reconciling_items", 0)),
+    ]
+    for label, val in walk_rows:
+        if label is None:
+            r += 1; continue
+        c1 = ws.cell(r, 1, label)
+        c2 = ws.cell(r, 2, val)
+        # Bold the "=" and "Difference" rows
+        is_total = label.startswith("=") or label.startswith("Difference")
+        c1.font = _font(bold=is_total)
+        c2.font = _font(bold=is_total)
+        c2.alignment = _align(h="right")
+        c2.number_format = NUM_FMT
+        if is_total and isinstance(val, (int, float)) and val < 0:
+            c2.font = _font(bold=True, color="9C0006")
         r += 1
 
-    for col, w in [(1,14),(2,14),(3,14),(4,14),(5,18)]:
-        ws.column_dimensions[get_column_letter(col)].width = w
+# ── Sheet 2: TDS Reconciliation ───────────────────────────────────────────────
+def _tds_sheet(wb, data):
+    ws = wb.create_sheet("TDS Reconciliation")
+    ws.sheet_view.showGridLines = False
+    _set_cols(ws, {"A": 50, "B": 22, "C": 22, "D": 55, "E": 18, "F": 14})
 
-# ── Main ──────────────────────────────────────────────────────────────────────
-def sheets_to_excel(sheets: list[dict],
-                    summary_text: str = "",
-                    meta: dict = None) -> bytes:
-    meta = meta or {}
-    wb   = Workbook()
+    tds = data.get("tds", {}) or {}
+
+    _title(ws, 1, "TDS Reconciliation", span=7)
+
+    # Banner
+    status = (tds.get("status") or "CLEAR").upper()
+    msg    = tds.get("message", "")
+    if status == "CLEAR":
+        prefix, kind = "✓ CLEAR", "good"
+    elif status == "PARTIAL":
+        prefix, kind = "⚠ PARTIAL", "warn"
+    elif status == "EXCESS":
+        prefix, kind = "✗ EXCESS", "bad"
+    else:
+        prefix, kind = "⚠ MISMATCH", "warn"
+    banner_text = f"{prefix}  —  {msg}" if msg else prefix
+    _banner(ws, 3, banner_text, kind=kind, span=7)
+
+    # TDS Totals Comparison
+    _section(ws, 6, "TDS Totals Comparison", span=7)
+    ws.cell(7, 2, "Our Records").font = _font(bold=True); ws.cell(7,2).alignment = _align(h="right")
+    ws.cell(7, 3, "Their Records").font = _font(bold=True); ws.cell(7,3).alignment = _align(h="right")
+    rows = [
+        ("TDS column total (sum of TDS Amount):",
+         tds.get("our_tds_column_total", 0), tds.get("their_tds_column_total", 0)),
+        ("TDS journal entries (descr-flagged):",
+         tds.get("our_tds_journal_total", 0), tds.get("their_tds_journal_total", 0)),
+    ]
+    r = 8
+    for label, ours, theirs in rows:
+        ws.cell(r, 1, label).font = _font()
+        for ci, v in [(2, ours), (3, theirs)]:
+            c = ws.cell(r, ci, v)
+            c.font = _font(); c.alignment = _align(h="right"); c.number_format = NUM_FMT
+        r += 1
+
+    # Cross-Comparison
+    _section(ws, 11, "Cross-Comparison", span=7)
+    cross_rows = [
+        ("Our TDS column  vs  Their TDS journal:", tds.get("our_col_vs_their_journal", 0)),
+        ("Their TDS column  vs  Our TDS journal:", tds.get("their_col_vs_our_journal", 0)),
+    ]
+    r = 12
+    for label, val in cross_rows:
+        ws.cell(r, 1, label).font = _font()
+        c = ws.cell(r, 2, val)
+        c.font = _font(); c.alignment = _align(h="right"); c.number_format = NUM_FMT
+        r += 1
+
+    # Individual TDS journal entries
+    journal = tds.get("journal_entries", []) or []
+    if journal:
+        _section(ws, 16, "Individual TDS Journal Entries Detected", span=7)
+        _table_header(ws, 17, ["Source", "Date", "Voucher No", "Description", "Amount", "Status"])
+        r = 18
+        for je in journal:
+            _write_row(ws, r, [
+                je.get("source",""), je.get("date",""), je.get("voucher_no",""),
+                je.get("description",""), je.get("amount", 0), je.get("status","")
+            ], num_cols={5})
+            # Status badge colour
+            s = (je.get("status") or "").upper()
+            if s:
+                sc = ws.cell(r, 6)
+                if s == "CLEAR":     sc.fill = _f(GREEN_BG); sc.font = _font(bold=True, color=GREEN_FG)
+                elif s == "PARTIAL": sc.fill = _f(AMBER_BG); sc.font = _font(bold=True, color=AMBER_FG)
+                elif s == "EXCESS":  sc.fill = _f(RED_BG);   sc.font = _font(bold=True, color=RED_FG)
+                sc.alignment = _align(h="center")
+            r += 1
+
+# ── Sheet 3: Matched ──────────────────────────────────────────────────────────
+def _matched_sheet(wb, data):
+    ws = wb.create_sheet("Matched")
+    ws.sheet_view.showGridLines = False
+    _set_cols(ws, {"A": 12, "B": 13, "C": 21, "D": 21, "E": 13, "F": 47, "G": 50, "H": 14, "I": 14, "J": 14})
+
+    rows = data.get("matched", [])
+    headers = ["Rec ID", "Match Level", "Our Date", "Their Date", "Invoice Ref",
+               "Our Description", "Their Description", "Our Amount", "Their Amount", "TDS Amount"]
+    _table_header(ws, 1, headers)
+    ws.freeze_panes = "A2"
+
+    if not rows:
+        ws.merge_cells("A2:J2")
+        c = ws.cell(2, 1, "(No matched records found)")
+        c.font = _font(italic=True, color="808080"); c.alignment = _align(h="center")
+        return
+
+    r = 2
+    for row in rows:
+        _write_row(ws, r, [
+            row.get("rec_id",""), row.get("match_level",""),
+            row.get("our_date",""), row.get("their_date",""),
+            row.get("invoice_ref",""),
+            row.get("our_description",""), row.get("their_description",""),
+            row.get("our_amount", 0), row.get("their_amount", 0), row.get("tds_amount", 0),
+        ], num_cols={8, 9, 10})
+
+        # Colour the match level
+        ml = (row.get("match_level") or "").upper()
+        lc = ws.cell(r, 2)
+        if ml == "L1":   lc.fill = _f(GREEN_BG); lc.font = _font(bold=True, color=GREEN_FG)
+        elif ml == "L2": lc.fill = _f(AMBER_BG); lc.font = _font(bold=True, color=AMBER_FG)
+        elif ml == "L3": lc.fill = _f(LIGHT_BLUE); lc.font = _font(bold=True, color=BLUE)
+        lc.alignment = _align(h="center")
+        r += 1
+
+# ── Sheet 4: Amount Mismatches ────────────────────────────────────────────────
+def _amount_mismatches_sheet(wb, data):
+    ws = wb.create_sheet("Amount Mismatches")
+    ws.sheet_view.showGridLines = False
+    _set_cols(ws, {"A": 14, "B": 13, "C": 14, "D": 45, "E": 16, "F": 16, "G": 14})
+
+    rows = data.get("amount_mismatches", [])
+    if not rows:
+        ws["A1"] = "(No amount mismatches — clean!)"
+        ws["A1"].font = _font(size=12, italic=True, color=GREEN_FG)
+        return
+
+    headers = ["Rec ID", "Date", "Invoice Ref", "Description",
+               "Our Amount", "Their Amount", "Difference"]
+    _table_header(ws, 1, headers)
+    ws.freeze_panes = "A2"
+
+    r = 2
+    for row in rows:
+        _write_row(ws, r, [
+            row.get("rec_id",""), row.get("date",""), row.get("invoice_ref",""),
+            row.get("description",""),
+            row.get("our_amount", 0), row.get("their_amount", 0), row.get("difference", 0),
+        ], num_cols={5, 6, 7})
+        # Highlight non-zero difference
+        diff = row.get("difference", 0)
+        if isinstance(diff, (int, float)) and diff != 0:
+            dc = ws.cell(r, 7)
+            dc.fill = _f(RED_BG); dc.font = _font(bold=True, color=RED_FG)
+            dc.number_format = NUM_FMT; dc.alignment = _align(h="right")
+        r += 1
+
+# ── Sheets 5 & 6: Missing in Their/Our Books ──────────────────────────────────
+def _missing_sheet(wb, sheet_name, rows, empty_msg):
+    ws = wb.create_sheet(sheet_name)
+    ws.sheet_view.showGridLines = False
+    _set_cols(ws, {"A": 13, "B": 14, "C": 16, "D": 13, "E": 36, "F": 14, "G": 14, "H": 14, "I": 40})
+
+    if not rows:
+        ws["A1"] = empty_msg
+        ws["A1"].font = _font(size=12, italic=True, color=GREEN_FG)
+        return
+
+    headers = ["Date", "Voucher Type", "Voucher No", "Invoice Ref", "Description",
+               "Gross Amount", "TDS Amount", "Net Amount", "Note"]
+    _table_header(ws, 1, headers)
+    ws.freeze_panes = "A2"
+
+    r = 2
+    for row in rows:
+        _write_row(ws, r, [
+            row.get("date",""), row.get("voucher_type",""), row.get("voucher_no",""),
+            row.get("invoice_ref",""), row.get("description",""),
+            row.get("gross_amount", 0), row.get("tds_amount", 0), row.get("net_amount", 0),
+            row.get("note","")
+        ], num_cols={6, 7, 8})
+        r += 1
+
+# ── Sheet 7: Timing Differences ───────────────────────────────────────────────
+def _timing_sheet(wb, data):
+    ws = wb.create_sheet("Timing Differences")
+    ws.sheet_view.showGridLines = False
+    _set_cols(ws, {"A": 12, "B": 13, "C": 21, "D": 21, "E": 13, "F": 47, "G": 50, "H": 14, "I": 14, "J": 14, "K": 12})
+
+    rows = data.get("timing_differences", [])
+    if not rows:
+        ws["A1"] = "(No timing differences — all matched dates agree)"
+        ws["A1"].font = _font(size=12, italic=True, color=GREEN_FG)
+        return
+
+    headers = ["Rec ID", "Match Level", "Our Date", "Their Date", "Invoice Ref",
+               "Our Description", "Their Description", "Our Amount", "Their Amount",
+               "TDS Amount", "Days Diff"]
+    _table_header(ws, 1, headers)
+    ws.freeze_panes = "A2"
+
+    r = 2
+    for row in rows:
+        _write_row(ws, r, [
+            row.get("rec_id",""), row.get("match_level","L2"),
+            row.get("our_date",""), row.get("their_date",""),
+            row.get("invoice_ref",""),
+            row.get("our_description",""), row.get("their_description",""),
+            row.get("our_amount", 0), row.get("their_amount", 0), row.get("tds_amount", 0),
+            row.get("days_diff", 0)
+        ], num_cols={8, 9, 10, 11})
+
+        ml = (row.get("match_level") or "L2").upper()
+        lc = ws.cell(r, 2)
+        if ml == "L2": lc.fill = _f(AMBER_BG); lc.font = _font(bold=True, color=AMBER_FG)
+        lc.alignment = _align(h="center")
+        r += 1
+
+# ── Main entry point ──────────────────────────────────────────────────────────
+def reco_to_excel(reco_data: dict) -> bytes:
+    """Build the 7-sheet reconciliation report from Claude's structured data."""
+    wb = Workbook()
     wb.remove(wb.active)
 
-    _cover(wb, sheets, meta)
-
-    seen = {}
-    for sh in sheets:
-        raw = str(sh.get("name","Sheet"))
-        for ch in r'/\?*[]:\x00': raw = raw.replace(ch,"-")
-        name = raw[:31].strip() or "Sheet"
-        seen[name] = seen.get(name, 0) + 1
-        if seen[name] > 1: name = name[:28] + f" {seen[name]}"
-        _sheet(wb, {**sh, "name": name})
-
-    if summary_text:
-        _notes(wb, summary_text)
+    _summary_sheet(wb, reco_data)
+    _tds_sheet(wb, reco_data)
+    _matched_sheet(wb, reco_data)
+    _amount_mismatches_sheet(wb, reco_data)
+    _missing_sheet(wb, "Missing in Their Books",
+                   reco_data.get("missing_their_books", []),
+                   "(Nothing missing on their side)")
+    _missing_sheet(wb, "Missing in Our Books",
+                   reco_data.get("missing_our_books", []),
+                   "(Nothing missing on our side)")
+    _timing_sheet(wb, reco_data)
 
     buf = io.BytesIO()
     wb.save(buf)
