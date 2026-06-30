@@ -138,102 +138,16 @@ st.markdown("""
 </div>""", unsafe_allow_html=True)
 
 # ── Results view ──────────────────────────────────────────────────────────────
-import json as _json
-
-def _reco_to_sheets(reco_data):
-    """Convert reco JSON to the list-of-sheets format used by the dashboard."""
-    sheets = []
-    s = reco_data.get("stats", {}) or {}
-    b = reco_data.get("balances", {}) or {}
-    tds = reco_data.get("tds", {}) or {}
-
-    # Summary as a key/value list
-    summary_rows = [["Metric", "Value"]]
-    summary_rows += [
-        ["Total records (Our books)",      s.get("total_ours", 0)],
-        ["Total records (Their books)",    s.get("total_theirs", 0)],
-        ["L1 matches",                     s.get("l1_matches", 0)],
-        ["L2 matches",                     s.get("l2_matches", 0)],
-        ["L3 matches",                     s.get("l3_matches", 0)],
-        ["Amount mismatches",              s.get("amount_mismatches", 0)],
-        ["Missing in their books",         s.get("missing_their_books", 0)],
-        ["Missing in our books",           s.get("missing_our_books", 0)],
-        ["Closing Balance (Ours)",         b.get("closing_ours", 0)],
-        ["Closing Balance (Theirs)",       b.get("closing_theirs", 0)],
-        ["Difference (Ours − Theirs)", b.get("difference", 0)],
-    ]
-    sheets.append({"name": "Reconciliation Summary", "rows": summary_rows})
-
-    # TDS
-    if tds.get("status") or tds.get("journal_entries"):
-        tds_rows = [["Item", "Our Records", "Their Records"]]
-        tds_rows += [
-            ["TDS column total",   tds.get("our_tds_column_total", 0),  tds.get("their_tds_column_total", 0)],
-            ["TDS journal total",  tds.get("our_tds_journal_total", 0), tds.get("their_tds_journal_total", 0)],
-        ]
-        for je in tds.get("journal_entries", []) or []:
-            tds_rows.append([
-                f"{je.get('source','')} {je.get('voucher_no','')}",
-                je.get("amount", 0) if je.get("source") == "Ours" else "",
-                je.get("amount", 0) if je.get("source") == "Theirs" else "",
-            ])
-        sheets.append({"name": "TDS Reconciliation", "rows": tds_rows,
-                       "_tds_status": tds.get("status",""), "_tds_msg": tds.get("message","")})
-
-    # Matched
-    matched = reco_data.get("matched", []) or []
-    if matched:
-        rows = [["Rec ID", "Level", "Our Date", "Their Date", "Invoice", "Description", "Our Amount", "Their Amount"]]
-        for m in matched:
-            rows.append([
-                m.get("rec_id",""), m.get("match_level",""),
-                m.get("our_date",""), m.get("their_date",""),
-                m.get("invoice_ref",""), m.get("our_description","") or m.get("their_description",""),
-                m.get("our_amount", 0), m.get("their_amount", 0)
-            ])
-        sheets.append({"name": "Matched", "rows": rows})
-
-    # Amount mismatches
-    am = reco_data.get("amount_mismatches", []) or []
-    if am:
-        rows = [["Rec ID", "Date", "Invoice", "Description", "Our Amount", "Their Amount", "Difference"]]
-        for m in am:
-            rows.append([m.get("rec_id",""), m.get("date",""), m.get("invoice_ref",""),
-                         m.get("description",""), m.get("our_amount", 0),
-                         m.get("their_amount", 0), m.get("difference", 0)])
-        sheets.append({"name": "Amount Mismatches", "rows": rows})
-
-    # Missing in their books
-    mt = reco_data.get("missing_their_books", []) or []
-    if mt:
-        rows = [["Date", "Voucher", "Invoice", "Description", "Gross", "TDS", "Net"]]
-        for x in mt:
-            rows.append([x.get("date",""), x.get("voucher_no",""), x.get("invoice_ref",""),
-                         x.get("description",""), x.get("gross_amount", 0),
-                         x.get("tds_amount", 0), x.get("net_amount", 0)])
-        sheets.append({"name": "Missing in Their Books", "rows": rows})
-
-    # Missing in our books
-    mo = reco_data.get("missing_our_books", []) or []
-    if mo:
-        rows = [["Date", "Voucher", "Invoice", "Description", "Gross", "TDS", "Net"]]
-        for x in mo:
-            rows.append([x.get("date",""), x.get("voucher_no",""), x.get("invoice_ref",""),
-                         x.get("description",""), x.get("gross_amount", 0),
-                         x.get("tds_amount", 0), x.get("net_amount", 0)])
-        sheets.append({"name": "Missing in Our Books", "rows": rows})
-
-    # Timing differences
-    td = reco_data.get("timing_differences", []) or []
-    if td:
-        rows = [["Rec ID", "Our Date", "Their Date", "Days", "Invoice", "Description", "Amount"]]
-        for x in td:
-            rows.append([x.get("rec_id",""), x.get("our_date",""), x.get("their_date",""),
-                         x.get("days_diff", 0), x.get("invoice_ref",""),
-                         x.get("our_description",""), x.get("our_amount", 0)])
-        sheets.append({"name": "Timing Differences", "rows": rows})
-
-    return sheets
+TONE_MAP = {
+    "summary": ("#F0F7F0","#2D6A4F","#2D6A4F","📊"),
+    "matched": ("#F0F7F0","#2D6A4F","#2D6A4F","✅"),
+    "diff":    ("#FDF2F2","#9B2226","#9B2226","⚠️"),
+    "tds":     ("#FEF9EC","#92400E","#B5793A","🧾"),
+    "onlya":   ("#F3F0FA","#5E548E","#5E548E","🔵"),
+    "onlyb":   ("#EFF6FD","#1D6FA4","#1D6FA4","🟣"),
+    "conc":    ("#EFF6FD","#1D6FA4","#1D6FA4","📋"),
+    "other":   ("#F7F5F2","#495867","#495867","📄"),
+}
 
 def _detect_tone(name):
     n = name.lower()
@@ -436,18 +350,29 @@ def _build_html(sheets, model_label, input_tokens, output_tokens, cost_inr, cost
 
 if "result" in st.session_state:
     r = st.session_state["result"]
-    sheets_view = _reco_to_sheets(r.sheets) if isinstance(r.sheets, dict) else r.sheets
-    metrics = _extract_metrics(sheets_view)
 
     if r.summary:
         st.markdown(
             '<p style="color:#4B5563;font-size:13.5px;line-height:1.75;margin-bottom:.6rem">' + r.summary + '</p>',
             unsafe_allow_html=True)
 
-    n_rows_total = sum(max(0,len(sh.get("rows",[]))-1) for sh in sheets_view)
-    h = max(700, 260 + n_rows_total * 42)
-    dash = _build_html(sheets_view, r.model_label, r.input_tokens, r.output_tokens, r.cost_inr, r.cost_usd, metrics)
-    components.html(dash, height=min(h, 3200), scrolling=True)
+        if r.summary:
+            st.markdown(
+                f'<p style="color:#4B4440;font-size:13.5px;line-height:1.75;margin-bottom:.9rem">{r.summary}</p>',
+                unsafe_allow_html=True)
+
+        # Cost pills
+        st.markdown(
+            f'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:.9rem">'
+            f'<span style="font-size:11px;font-weight:600;background:#F4EFE8;border:1px solid #EAE3D8;'
+            f'border-radius:999px;padding:3px 11px;color:#6B5E52">{r.model_label.split(" (")[0]}</span>'
+            f'<span style="font-size:11px;font-weight:600;background:#F4EFE8;border:1px solid #EAE3D8;'
+            f'border-radius:999px;padding:3px 11px;color:#6B5E52">'
+            f'In {r.input_tokens:,} · Out {r.output_tokens:,} tokens</span>'
+            f'<span style="font-size:11px;font-weight:600;background:#F4EFE8;border:1px solid #EAE3D8;'
+            f'border-radius:999px;padding:3px 11px;color:#6B5E52">'
+            f'₹ {r.cost_inr:,.2f} ($ {r.cost_usd:.4f})</span>'
+            f'</div>', unsafe_allow_html=True)
 
     fname = f"Reco_{datetime.now():%Y%m%d_%H%M}.xlsx"
     st.download_button(
