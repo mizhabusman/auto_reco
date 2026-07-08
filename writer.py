@@ -132,7 +132,9 @@ def _section_sheet(wb, section, used_names):
     hfill, hfont, bfill, bfont = _tone(section.get("tone"))
     columns = section.get("columns", []) or []
     rows    = section.get("rows", []) or []
-    ncols   = max(1, len(columns))
+    # Size to the widest of (declared columns, any row) so no cell is lost.
+    ncols   = max([1, len(columns)] + [len(r) for r in rows])
+    columns = [str(c) for c in columns] + [f"Col {i + 1}" for i in range(len(columns), ncols)]
 
     # Title
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncols)

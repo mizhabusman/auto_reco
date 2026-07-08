@@ -183,10 +183,18 @@ def render_section(sec):
         st.caption("No entries in this section.")
         return
 
-    ncol = len(columns) if columns else max(len(r) for r in rows)
-    cols = columns if columns else [f"Col {i+1}" for i in range(ncol)]
+    # Size to the widest of (declared columns, any row) so a mismatch never crashes.
+    ncol = max([len(columns)] + [len(r) for r in rows])
+    cols = [str(c) for c in columns] + [f"Col {i + 1}" for i in range(len(columns), ncol)]
+
+    # De-duplicate headers (Arrow/st.dataframe rejects duplicate column names).
+    seen, cols_unique = {}, []
+    for c in cols:
+        seen[c] = seen.get(c, 0) + 1
+        cols_unique.append(c if seen[c] == 1 else f"{c} ({seen[c]})")
+
     norm = [list(r) + [""] * (ncol - len(r)) for r in rows]
-    df = pd.DataFrame(norm, columns=cols)
+    df = pd.DataFrame(norm, columns=cols_unique)
     st.dataframe(df, use_container_width=True, hide_index=True)
 
 if "result" in st.session_state:
