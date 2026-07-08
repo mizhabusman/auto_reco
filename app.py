@@ -1,12 +1,10 @@
 """
-app.py — Reconciliation dashboard.
-Upload two ledgers → Claude reconciles → dashboard + neat Excel download.
+app.py — Upload two ledgers → Claude reconciles → read the report. That's it.
 """
 from __future__ import annotations
 import os, traceback
 from datetime import datetime
 
-import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 from dotenv import load_dotenv
@@ -20,18 +18,7 @@ load_dotenv()
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 USD_INR = DEFAULT_USD_INR
 
-st.set_page_config(page_title="Ledger Reconciliation", page_icon="📘", layout="wide")
-
-# ── Tone palette (shared with the Excel writer's intent) ───────────────────────
-TONES = {
-    "success": ("#E7F5EE", "#A9D9BF", "#1E7D4F"),
-    "warning": ("#FBF1DC", "#EAD3A0", "#8A5A0F"),
-    "danger":  ("#F9E4E3", "#E7B7B4", "#B3261E"),
-    "info":    ("#E4F0F8", "#AECEE4", "#1D6FA4"),
-    "neutral": ("#F1EEE9", "#D9D2C7", "#55504A"),
-}
-def tone(name):
-    return TONES.get(str(name or "").lower(), TONES["neutral"])
+st.set_page_config(page_title="Ledger Reconciliation", page_icon="📘", layout="centered")
 
 st.markdown("""
 <style>
@@ -39,7 +26,7 @@ st.markdown("""
        --accent:#2563EB; --adk:#1D4ED8; --line:#E5E7EB; }
 header[data-testid="stHeader"],#MainMenu,footer,div[data-testid="stToolbar"]{ display:none !important; }
 .stApp{ background:linear-gradient(180deg,#F7F8FA 0%,#EEF1F5 100%) fixed; }
-.block-container{ padding:2.2rem 2.2rem 4rem; max-width:1180px; }
+.block-container{ padding:2.2rem 1.2rem 4rem; max-width:820px; }
 html,body,[class*="css"]{
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   color:var(--ink); }
@@ -84,17 +71,17 @@ div[role="radiogroup"] > label:has(input:checked) div[data-testid="stMarkdownCon
 .kpi .label{ font-size:.72rem; font-weight:700; letter-spacing:.09em; text-transform:uppercase; color:var(--muted); }
 .kpi .value{ font-size:1.7rem; font-weight:700; margin-top:6px; line-height:1.1; font-variant-numeric:tabular-nums; }
 
-.summary-box{ background:#fff; border:1px solid var(--line); border-radius:16px;
-  padding:1.2rem 1.4rem; font-size:1rem; line-height:1.75; color:var(--ink); margin-bottom:1rem;
-  box-shadow:0 1px 2px rgba(39,34,32,.04),0 10px 26px rgba(39,34,32,.05); }
-.sec-note{ border-radius:12px; padding:11px 15px; font-size:.92rem; font-weight:600; margin:.2rem 0 .8rem; }
-
-.section-title{ font-size:1.15rem; font-weight:700; margin:.4rem 0 .7rem; }
-.insight{ background:#fff; border:1px solid var(--line); border-left-width:5px; border-radius:12px;
-  padding:12px 16px; margin-bottom:10px;
-  box-shadow:0 1px 2px rgba(31,41,55,.04),0 6px 18px rgba(31,41,55,.05); }
-.insight .it-title{ font-size:.98rem; font-weight:700; margin-bottom:3px; }
-.insight .it-detail{ font-size:.92rem; line-height:1.6; color:#374151; }
+/* AI report */
+.report-box{ background:#fff; border:1px solid var(--line); border-radius:16px;
+  padding:1.6rem 1.9rem; color:var(--ink); margin-bottom:1rem;
+  box-shadow:0 1px 2px rgba(31,41,55,.04),0 10px 26px rgba(31,41,55,.05); }
+.report-box p,.report-box li{ font-size:.97rem; line-height:1.75; }
+.report-box h1{ font-size:1.5rem; } .report-box h2{ font-size:1.25rem; } .report-box h3{ font-size:1.08rem; }
+.report-box h1,.report-box h2,.report-box h3{ font-weight:700; margin:1.1rem 0 .5rem; }
+.report-box table{ border-collapse:collapse; width:100%; margin:1rem 0; font-size:.9rem; }
+.report-box th,.report-box td{ border:1px solid var(--line); padding:8px 11px; text-align:left; }
+.report-box th{ background:var(--bg2); font-weight:600; }
+.report-box code{ background:#EEF2FF; padding:1px 5px; border-radius:5px; font-size:.88rem; }
 
 .stButton>button{ background:linear-gradient(135deg,var(--accent),var(--adk)); color:#fff;
   border:0; border-radius:12px; padding:.85rem 1.2rem; font-weight:600; font-size:.98rem;
@@ -161,109 +148,33 @@ st.markdown("""
   <p>Upload 2 ledgers and let the model reconcile them for you.</p>
 </div>""", unsafe_allow_html=True)
 
-# ── Results dashboard ─────────────────────────────────────────────────────────
-def render_kpis(metrics):
-    if not metrics:
-        return
-    cards = ""
-    for m in metrics:
-        _, _, fg = tone(m.get("tone"))
-        cards += (
-            '<div class="kpi"><div class="accent" style="background:' + fg + '"></div>'
-            '<div class="label">' + str(m.get("label", "")) + '</div>'
-            '<div class="value" style="color:' + fg + '">' + str(m.get("value", "")) + '</div></div>'
-        )
-    st.markdown('<div class="kpi-grid">' + cards + '</div>', unsafe_allow_html=True)
-
-def render_insights(insights):
-    if not insights:
-        return
-    st.markdown('<div class="section-title">🔎 Findings &amp; Recommendations</div>', unsafe_allow_html=True)
-    for it in insights:
-        if isinstance(it, str):
-            it = {"detail": it}
-        bg, bd, fg = tone(it.get("tone"))
-        title  = str(it.get("title", "") or "").strip()
-        detail = str(it.get("detail", it.get("text", "")) or "").strip()
-        title_html = f'<div class="it-title" style="color:{fg}">{title}</div>' if title else ""
-        st.markdown(
-            f'<div class="insight" style="border-left-color:{fg};background:{bg}">'
-            f'{title_html}<div class="it-detail">{detail}</div></div>',
-            unsafe_allow_html=True)
-
-def render_section(sec):
-    columns = sec.get("columns", []) or []
-    rows    = sec.get("rows", []) or []
-    note    = sec.get("note")
-    bg, bd, fg = tone(sec.get("tone"))
-
-    if note:
-        st.markdown(
-            f'<div class="sec-note" style="background:{bg};border:1px solid {bd};color:{fg}">{note}</div>',
-            unsafe_allow_html=True)
-
-    if not rows:
-        st.caption("No entries in this section.")
-        return
-
-    # Size to the widest of (declared columns, any row) so a mismatch never crashes.
-    ncol = max([len(columns)] + [len(r) for r in rows])
-    cols = [str(c) for c in columns] + [f"Col {i + 1}" for i in range(len(columns), ncol)]
-
-    # De-duplicate headers (Arrow/st.dataframe rejects duplicate column names).
-    seen, cols_unique = {}, []
-    for c in cols:
-        seen[c] = seen.get(c, 0) + 1
-        cols_unique.append(c if seen[c] == 1 else f"{c} ({seen[c]})")
-
-    norm = [list(r) + [""] * (ncol - len(r)) for r in rows]
-    df = pd.DataFrame(norm, columns=cols_unique)
-    st.dataframe(df, use_container_width=True, hide_index=True)
-
+# ── Result view ───────────────────────────────────────────────────────────────
 if "result" in st.session_state:
     r = st.session_state["result"]
 
-    top = st.columns([3, 1])
-    with top[0]:
-        st.markdown(
-            f'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:.4rem">'
-            f'<span class="pill">{r.model_label.split(" (")[0]}</span>'
-            f'<span class="pill">In {r.input_tokens:,} · Out {r.output_tokens:,} tokens</span>'
-            f'<span class="pill">₹ {r.cost_inr:,.2f} ($ {r.cost_usd:.4f})</span>'
-            f'</div>', unsafe_allow_html=True)
-    with top[1]:
-        fname = f"Reconciliation_{datetime.now():%Y%m%d_%H%M}.xlsx"
-        st.download_button(
-            "⬇️  Download Excel", data=r.excel_bytes, file_name=fname,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True)
+    st.markdown(
+        f'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:.7rem">'
+        f'<span class="pill">{r.model_label.split(" (")[0]}</span>'
+        f'<span class="pill">In {r.input_tokens:,} · Out {r.output_tokens:,} tokens</span>'
+        f'<span class="pill">₹ {r.cost_inr:,.2f} ($ {r.cost_usd:.4f})</span>'
+        f'</div>', unsafe_allow_html=True)
 
-    render_kpis(r.metrics)
+    st.markdown('<div class="report-box">', unsafe_allow_html=True)
+    st.markdown(r.report)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    if r.summary:
-        st.markdown(f'<div class="summary-box">{r.summary}</div>', unsafe_allow_html=True)
+    fname = f"Reconciliation_{datetime.now():%Y%m%d_%H%M}.md"
+    st.download_button(
+        "⬇️  Download reconciliation (.md)",
+        data=r.report.encode("utf-8"), file_name=fname,
+        mime="text/markdown", use_container_width=True)
 
-    render_insights(getattr(r, "insights", []))
-
-    if r.sections:
-        st.markdown('<div class="section-title">📑 Detailed breakdown</div>', unsafe_allow_html=True)
-        titles = [s.get("title", f"Section {i+1}") for i, s in enumerate(r.sections)]
-        for tab, sec in zip(st.tabs(titles), r.sections):
-            with tab:
-                render_section(sec)
-    elif not (r.summary or getattr(r, "insights", [])):
-        st.warning("Claude did not return structured results. Raw response below.")
-        st.code(r.raw_response[:6000])
-
-    with st.expander("🔍  Raw AI response"):
-        st.code(r.raw_response[:8000] + ("…" if len(r.raw_response) > 8000 else ""))
-
-    st.button("↺  Start a new reconciliation", on_click=start_new)
+    st.button("↺  Start a new reconciliation", on_click=start_new, use_container_width=True)
     st.stop()
 
 # ── Form view ─────────────────────────────────────────────────────────────────
 uk = st.session_state["uploader_key"]
-_, mid, _ = st.columns([1, 2.4, 1])
+mid = st.container()
 
 with mid:
     with st.container(border=True):

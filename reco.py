@@ -1,25 +1,21 @@
 """
-reco.py — Hand two ledgers to Claude, let it reconcile them, get structured
-results back, and turn them into a neat Excel report.
+reco.py — Hand two ledgers to Claude, let it reconcile them freely, return the report.
 
-Claude decides the content (sections, columns, what matters). We only fix the
-JSON envelope (see prompt.py) so the app can render a dashboard + Excel.
+No rigid schema, no forced format. Claude acts as the CA expert and decides
+everything about how to reconcile and how to present the result.
 """
 
 from __future__ import annotations
 import base64
 import csv as _csv
 import io
-import json
 import os
-import re
 from dataclasses import dataclass, field
 
 import pandas as pd
 from anthropic import Anthropic
 
-from prompt import SYSTEM_PROMPT, TASK_INSTRUCTION, OUTPUT_INSTRUCTION
-from writer import reco_to_excel
+from prompt import SYSTEM_PROMPT, TASK_INSTRUCTION
 
 # ---------------------------------------------------------------------------
 # Models
@@ -107,34 +103,11 @@ def _excel_to_text(b: bytes) -> str:
     raise RuntimeError(f"Could not read file: {last}")
 
 # ---------------------------------------------------------------------------
-# Parse Claude's JSON response (robust to stray fences / prose).
-# ---------------------------------------------------------------------------
-def _parse_json(raw: str) -> dict:
-    txt = raw.strip()
-    txt = re.sub(r"^```[a-zA-Z]*\n?", "", txt)
-    txt = re.sub(r"\n?```$", "", txt).strip()
-    try:
-        return json.loads(txt)
-    except json.JSONDecodeError:
-        start, end = txt.find("{"), txt.rfind("}")
-        if start != -1 and end != -1:
-            try:
-                return json.loads(txt[start:end + 1])
-            except json.JSONDecodeError:
-                pass
-    return {"summary": "", "metrics": [], "insights": [], "sections": []}
-
-# ---------------------------------------------------------------------------
 # Result
 # ---------------------------------------------------------------------------
 @dataclass
 class RecoResult:
-    excel_bytes: bytes
-    summary: str
-    metrics: list[dict]
-    insights: list[dict]
-    sections: list[dict]
-    raw_response: str
+    report: str            # Claude's reconciliation, verbatim (markdown)
     model_label: str
     input_tokens: int
     output_tokens: int
@@ -171,7 +144,6 @@ def run_reconciliation(
         [{"type": "text", "text": TASK_INSTRUCTION}]
         + ledger_blocks("LEDGER 1", file_a_bytes, file_a_name)
         + ledger_blocks("LEDGER 2", file_b_bytes, file_b_name)
-        + [{"type": "text", "text": OUTPUT_INSTRUCTION}]
     )
 
     msg = client.messages.create(
@@ -180,22 +152,10 @@ def run_reconciliation(
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": content}],
     )
-    raw  = "".join(b.text for b in msg.content if b.type == "text").strip()
-    data = _parse_json(raw)
-
-    summary  = data.get("summary", "") or ""
-    metrics  = data.get("metrics", []) or []
-    insights = data.get("insights", []) or []
-    sections = data.get("sections", []) or []
-    excel    = reco_to_excel(summary, metrics, insights, sections)
+    report = "".join(b.text for b in msg.content if b.type == "text").strip()
 
     return RecoResult(
-        excel_bytes=excel,
-        summary=summary,
-        metrics=metrics,
-        insights=insights,
-        sections=sections,
-        raw_response=raw,
+        report=report,
         model_label=model_label,
         input_tokens=msg.usage.input_tokens,
         output_tokens=msg.usage.output_tokens,
