@@ -89,6 +89,13 @@ div[role="radiogroup"] > label:has(input:checked) div[data-testid="stMarkdownCon
   box-shadow:0 1px 2px rgba(39,34,32,.04),0 10px 26px rgba(39,34,32,.05); }
 .sec-note{ border-radius:12px; padding:11px 15px; font-size:.92rem; font-weight:600; margin:.2rem 0 .8rem; }
 
+.section-title{ font-size:1.15rem; font-weight:700; margin:.4rem 0 .7rem; }
+.insight{ background:#fff; border:1px solid var(--line); border-left-width:5px; border-radius:12px;
+  padding:12px 16px; margin-bottom:10px;
+  box-shadow:0 1px 2px rgba(31,41,55,.04),0 6px 18px rgba(31,41,55,.05); }
+.insight .it-title{ font-size:.98rem; font-weight:700; margin-bottom:3px; }
+.insight .it-detail{ font-size:.92rem; line-height:1.6; color:#374151; }
+
 .stButton>button{ background:linear-gradient(135deg,var(--accent),var(--adk)); color:#fff;
   border:0; border-radius:12px; padding:.85rem 1.2rem; font-weight:600; font-size:.98rem;
   box-shadow:0 8px 20px rgba(37,99,235,.28); transition:transform .08s,filter .2s; }
@@ -168,6 +175,22 @@ def render_kpis(metrics):
         )
     st.markdown('<div class="kpi-grid">' + cards + '</div>', unsafe_allow_html=True)
 
+def render_insights(insights):
+    if not insights:
+        return
+    st.markdown('<div class="section-title">🔎 Findings &amp; Recommendations</div>', unsafe_allow_html=True)
+    for it in insights:
+        if isinstance(it, str):
+            it = {"detail": it}
+        bg, bd, fg = tone(it.get("tone"))
+        title  = str(it.get("title", "") or "").strip()
+        detail = str(it.get("detail", it.get("text", "")) or "").strip()
+        title_html = f'<div class="it-title" style="color:{fg}">{title}</div>' if title else ""
+        st.markdown(
+            f'<div class="insight" style="border-left-color:{fg};background:{bg}">'
+            f'{title_html}<div class="it-detail">{detail}</div></div>',
+            unsafe_allow_html=True)
+
 def render_section(sec):
     columns = sec.get("columns", []) or []
     rows    = sec.get("rows", []) or []
@@ -220,13 +243,16 @@ if "result" in st.session_state:
     if r.summary:
         st.markdown(f'<div class="summary-box">{r.summary}</div>', unsafe_allow_html=True)
 
+    render_insights(getattr(r, "insights", []))
+
     if r.sections:
+        st.markdown('<div class="section-title">📑 Detailed breakdown</div>', unsafe_allow_html=True)
         titles = [s.get("title", f"Section {i+1}") for i, s in enumerate(r.sections)]
         for tab, sec in zip(st.tabs(titles), r.sections):
             with tab:
                 render_section(sec)
-    elif not r.summary:
-        st.warning("Claude did not return structured sections. Raw response below.")
+    elif not (r.summary or getattr(r, "insights", [])):
+        st.warning("Claude did not return structured results. Raw response below.")
         st.code(r.raw_response[:6000])
 
     with st.expander("🔍  Raw AI response"):

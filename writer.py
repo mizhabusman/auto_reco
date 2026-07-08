@@ -85,11 +85,11 @@ def _autofit(ws, ncols, sample_rows):
 
 
 # ── Summary sheet ────────────────────────────────────────────────────────────
-def _summary_sheet(wb, summary, metrics):
+def _summary_sheet(wb, summary, metrics, insights):
     ws = wb.create_sheet("Summary")
     ws.sheet_view.showGridLines = False
     ws.column_dimensions["A"].width = 42
-    ws.column_dimensions["B"].width = 26
+    ws.column_dimensions["B"].width = 60
 
     c = ws.cell(1, 1, "Reconciliation Report")
     c.font = _font(size=18, bold=True, color=BRAND)
@@ -102,7 +102,7 @@ def _summary_sheet(wb, summary, metrics):
         sc.font = _font(size=11, color=INK)
         sc.alignment = _align(wrap=True, v="top")
         # rough height for wrapped text
-        ws.row_dimensions[r].height = max(45, 15 * (len(summary) // 90 + 1))
+        ws.row_dimensions[r].height = max(45, 15 * (len(summary) // 110 + 1))
         r += 2
 
     if metrics:
@@ -110,7 +110,7 @@ def _summary_sheet(wb, summary, metrics):
         h.font = _font(size=13, bold=True, color=INK)
         r += 1
         for m in metrics:
-            hf, ff, _, _ = _tone(m.get("tone"))
+            hf = _tone(m.get("tone"))[0]
             lc = ws.cell(r, 1, str(m.get("label", "")))
             lc.font = _font(bold=True)
             lc.border = _thin()
@@ -120,6 +120,27 @@ def _summary_sheet(wb, summary, metrics):
             vc.fill = _f(_tone(m.get("tone"))[2])
             vc.border = _thin()
             vc.alignment = _align(h="right")
+            r += 1
+        r += 1
+
+    if insights:
+        h = ws.cell(r, 1, "Findings & Recommendations")
+        h.font = _font(size=13, bold=True, color=INK)
+        r += 1
+        for it in insights:
+            hf, _, bfill, bfont = _tone(it.get("tone"))
+            title  = str(it.get("title", "") or "").strip()
+            detail = str(it.get("detail", it.get("text", "")) or "").strip()
+            tc = ws.cell(r, 1, title or "Note")
+            tc.font = _font(bold=True, color=bfont)
+            tc.fill = _f(bfill)
+            tc.border = _thin()
+            tc.alignment = _align(v="top", wrap=True)
+            dc = ws.cell(r, 2, detail)
+            dc.font = _font(color=INK)
+            dc.border = _thin()
+            dc.alignment = _align(v="top", wrap=True)
+            ws.row_dimensions[r].height = max(30, 15 * (len(detail) // 70 + 1))
             r += 1
 
 
@@ -191,11 +212,11 @@ def _section_sheet(wb, section, used_names):
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
-def reco_to_excel(summary: str, metrics: list, sections: list) -> bytes:
+def reco_to_excel(summary: str, metrics: list, insights: list, sections: list) -> bytes:
     wb = Workbook()
     wb.remove(wb.active)
 
-    _summary_sheet(wb, summary, metrics or [])
+    _summary_sheet(wb, summary, metrics or [], insights or [])
 
     used = {"summary"}
     for section in (sections or []):

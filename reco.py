@@ -122,7 +122,7 @@ def _parse_json(raw: str) -> dict:
                 return json.loads(txt[start:end + 1])
             except json.JSONDecodeError:
                 pass
-    return {"summary": "", "metrics": [], "sections": []}
+    return {"summary": "", "metrics": [], "insights": [], "sections": []}
 
 # ---------------------------------------------------------------------------
 # Result
@@ -132,6 +132,7 @@ class RecoResult:
     excel_bytes: bytes
     summary: str
     metrics: list[dict]
+    insights: list[dict]
     sections: list[dict]
     raw_response: str
     model_label: str
@@ -184,13 +185,15 @@ def run_reconciliation(
 
     summary  = data.get("summary", "") or ""
     metrics  = data.get("metrics", []) or []
+    insights = data.get("insights", []) or []
     sections = data.get("sections", []) or []
-    excel    = reco_to_excel(summary, metrics, sections)
+    excel    = reco_to_excel(summary, metrics, insights, sections)
 
     return RecoResult(
         excel_bytes=excel,
         summary=summary,
         metrics=metrics,
+        insights=insights,
         sections=sections,
         raw_response=raw,
         model_label=model_label,
