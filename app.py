@@ -149,6 +149,10 @@ st.markdown("""
 </div>""", unsafe_allow_html=True)
 
 # ── Result view ───────────────────────────────────────────────────────────────
+# Guard against a stale result object left in session from an older code version.
+if "result" in st.session_state and not hasattr(st.session_state["result"], "report"):
+    st.session_state.pop("result", None)
+
 if "result" in st.session_state:
     r = st.session_state["result"]
 
@@ -163,11 +167,12 @@ if "result" in st.session_state:
     st.markdown(r.report)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    fname = f"Reconciliation_{datetime.now():%Y%m%d_%H%M}.md"
+    fname = f"Reconciliation_{datetime.now():%Y%m%d_%H%M}.xlsx"
     st.download_button(
-        "⬇️  Download reconciliation (.md)",
-        data=r.report.encode("utf-8"), file_name=fname,
-        mime="text/markdown", use_container_width=True)
+        "⬇️  Download reconciliation (.xlsx)",
+        data=r.excel_bytes, file_name=fname,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True)
 
     st.button("↺  Start a new reconciliation", on_click=start_new, use_container_width=True)
     st.stop()

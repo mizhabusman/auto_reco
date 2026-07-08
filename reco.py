@@ -16,6 +16,7 @@ import pandas as pd
 from anthropic import Anthropic
 
 from prompt import SYSTEM_PROMPT, TASK_INSTRUCTION
+from writer import report_to_excel
 
 # ---------------------------------------------------------------------------
 # Models
@@ -108,6 +109,7 @@ def _excel_to_text(b: bytes) -> str:
 @dataclass
 class RecoResult:
     report: str            # Claude's reconciliation, verbatim (markdown)
+    excel_bytes: bytes     # the same report, rendered to a neat Excel
     model_label: str
     input_tokens: int
     output_tokens: int
@@ -156,6 +158,7 @@ def run_reconciliation(
 
     return RecoResult(
         report=report,
+        excel_bytes=report_to_excel(report),
         model_label=model_label,
         input_tokens=msg.usage.input_tokens,
         output_tokens=msg.usage.output_tokens,
