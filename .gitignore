@@ -10,6 +10,9 @@ env/
 __pycache__/
 *.pyc
 
+# Claude Code local tooling config
+.claude/
+
 # Operating system files
 .DS_Store
 Thumbs.db

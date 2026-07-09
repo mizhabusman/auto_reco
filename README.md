@@ -1,94 +1,62 @@
-# AI Ledger Reconciliation
+# AI Ledger Reconciliation — Claude as the CA
 
-Upload two ledger exports (Excel/CSV). Claude does the entire reconciliation —
-detecting headers, cleaning rows, matching invoices (fuzzy + TDS-aware),
-categorizing, and producing insights. You get a formatted Excel report.
+Upload two ledger exports (Excel, CSV, PDF or Word). Claude reconciles them exactly the way
+it does in chat — no template, no rules imposed — with the report **streaming
+live onto the screen** as it's written, followed by a downloadable Excel
+workbook whose sheets and columns Claude designed itself.
 
-## Architecture
+## How it works
 
 ```
-File A  ─┐
-File B  ─┴─►  raw CSV-text dump  ──►  Claude (Sonnet 4.6)  ──►  JSON  ──►  Excel
-                                       (prompt.py)                       (writer.py)
+File A ─┐                       ┌─► Call 1: "You're a CA — reconcile these."
+File B ─┴─► raw text dump ──────┤        └─► markdown report (streamed live)
+                                └─► Call 2: "Lay that reconciliation out as
+                                     an Excel workbook" → JSON → .xlsx
 ```
 
-**No business logic in Python.** All reconciliation rules — matching priorities,
-TDS handling, categories, summary insights, output schema — live entirely in
-`prompt.py`. Edit that one file when rules change.
+**No reconciliation logic in Python.** Call 1 is a pure chat mimic — Claude
+gets the two ledgers and one instruction, so it reconciles at full quality,
+finding things you might not. Call 2 structures Claude's *own* findings into
+Excel. The app is only plumbing.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `app.py` | Streamlit UI (upload → run → download). |
-| `reco.py` | Reads raw files, calls Claude, parses JSON. Thin orchestrator. |
-| `prompt.py` | **The brain.** The reconciliation prompt. Edit me. |
-| `writer.py` | Turns Claude's JSON into a formatted multi-sheet `.xlsx`. |
-| `requirements.txt` | Python deps. |
-| `.env.example` | Copy to `.env` and add your Anthropic API key. |
+| `app.py` | Streamlit UI: upload → stream → download. |
+| `engine.py` | File reading, the two streamed Claude calls, cost tracking. |
+| `prompts.py` | **The only "logic".** Two short prompts. Edit me. |
+| `excel_writer.py` | Generic dumper: whatever sheets Claude returns → .xlsx. |
+| `BUILD_PROMPT.md` | The full prompt to rebuild this app from scratch. |
 
 ## Setup
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
+python -m venv venv
+venv\Scripts\activate          # macOS/Linux: source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env                # then edit .env with your key
+# put ANTHROPIC_API_KEY=... in .env
 streamlit run app.py
 ```
 
-Open http://localhost:8501.
+## Models
 
-## Output structure
+| Pick | Model | Price (per MTok in/out) |
+|---|---|---|
+| Haiku | `claude-haiku-4-5` | $1 / $5 |
+| Sonnet (default) | `claude-sonnet-4-6` | $3 / $15 |
+| Opus | `claude-opus-4-8` | $5 / $25 |
 
-The downloaded `.xlsx` has these sheets:
-
-- **Summary** — opening / closing balances per side, totals, category counts,
-  AI insights, closing-balance difference.
-- **Matched** — invoice + amount agree.
-- **Amount Mismatches** — invoice matched, amount differs.
-- **TDS Differences** — matched only after TDS adjustment (verify TDS booking).
-- **Date Mismatches** — invoice + amount agree, dates differ > 15 days.
-- **Unmatched in A** — present only in Party A's books.
-- **Unmatched in B** — present only in Party B's books.
+Sonnet and Opus run with adaptive thinking for deeper reconciliation.
+Actual cost (both calls combined) is shown after every run.
 
 ## Tweaking behaviour
 
-Open `prompt.py`. The prompt is annotated with sections:
-
-- **STEP 1** — header / column detection rules.
-- **STEP 2** — matching priorities (invoice fuzziness, TDS tolerance, date window).
-- **STEP 3** — category definitions.
-- **STEP 4** — summary computation + insight style.
-- **OUTPUT** — strict JSON schema.
-
-If your boss hands you a "standard reco template", reshape the JSON schema in
-**OUTPUT** (and the matching sheet headers in `writer.py`). Everything else
-stays the same.
-
-## Cost
-
-Sonnet 4.6 at $3 in / $15 out per million tokens.
-- 100-row ledgers: ~$0.02–0.05 per reco
-- 500-row ledgers: ~$0.10–0.20 per reco
-
-Visible in the UI after each run.
+Everything Claude does is driven by [`prompts.py`](prompts.py) — two short
+prompts. Want a different focus (GST, forex, a certain tone)? Edit the text
+there. Nothing else needs to change.
 
 ## Hosting
 
-It's stateless. No DB. Any of the following will work:
-
-- **Streamlit Community Cloud** — free, push to GitHub, set the API key as a secret.
-- **Render / Railway / Fly.io** — `streamlit run app.py --server.port $PORT`.
-- **Internal VM** — same command behind nginx + auth.
-
-## Limits / known caveats
-
-- For ledgers far above 500 rows, the raw-dump approach may approach the model's
-  input window. If/when that happens, switch to a chunked flow in `reco.py`
-  (split by date range, reconcile chunks, merge JSON). The prompt does not
-  need to change.
-- Claude sometimes wraps JSON in code fences despite instructions; `reco.py`
-  strips them defensively.
-- `.xls` (old binary) files require `xlrd==2.0.1` and only support read.
-  `.xlsx` is preferred.
+Stateless, no DB. Streamlit Community Cloud / Render / Railway / a VM —
+set `ANTHROPIC_API_KEY` as a secret and run `streamlit run app.py`.
