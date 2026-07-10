@@ -29,8 +29,8 @@ st.set_page_config(page_title="Ledger Reconciliation", page_icon="📘", layout=
 
 st.markdown("""
 <style>
-:root{ --bg:#F5F5F5; --bg2:#FAFAFA; --card:#FFF; --ink:#272220; --muted:#8C8379;
-       --accent:#B5793A; --adk:#8C5C2B; --line:#EAE3D8;
+:root{ --bg:#F7F4F1; --bg2:#FBF8F5; --card:#FFF; --ink:#2C2420; --muted:#9A8E85;
+       --accent:#C08E7D; --adk:#97685A; --accent-soft:#F0E2DC; --accent-deep:#8C5A4B; --line:#ECE3DD;
        --font:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; }
 header[data-testid="stHeader"],#MainMenu,footer,div[data-testid="stToolbar"],
 section[data-testid="stSidebar"]{ display:none !important; }
@@ -49,9 +49,9 @@ div[data-testid="stVerticalBlockBorderWrapper"]{
   border-radius:18px; padding:1.4rem 1.5rem;
   box-shadow:0 1px 2px rgba(39,34,32,.04),0 12px 30px rgba(39,34,32,.05); }
 .card-h{ display:flex; align-items:center; gap:10px; margin-bottom:.4rem; }
-.num{ background:linear-gradient(135deg,var(--accent),var(--adk)); color:#fff;
+.num{ background:linear-gradient(135deg,var(--adk),var(--accent-deep)); color:#fff;
   width:26px; height:26px; border-radius:8px; display:inline-flex; align-items:center;
-  justify-content:center; font-size:.82rem; font-weight:600; box-shadow:0 4px 10px rgba(181,121,58,.3); }
+  justify-content:center; font-size:.82rem; font-weight:600; box-shadow:0 4px 10px rgba(151,104,90,.28); }
 .card-t{ font-weight:600; font-size:1.12rem; }
 .card-sub{ color:var(--muted); font-size:.86rem; margin:-.1rem 0 .4rem 36px; }
 
@@ -62,27 +62,32 @@ div[data-testid="stFileUploader"] section:hover{ border-color:var(--accent); }
 /* Model picker — compact segmented pill toggle (centered, not full width) */
 div[role="radiogroup"]{ display:flex; width:100%; max-width:340px; margin:.15rem auto 0;
   gap:4px; flex-wrap:nowrap; align-items:stretch;
-  background:linear-gradient(135deg,var(--accent),var(--adk)); border-radius:999px; padding:4px;
-  box-shadow:0 6px 16px rgba(181,121,58,.24), inset 0 1px 2px rgba(255,255,255,.18); }
+  background:var(--accent-soft); border:1px solid var(--line); border-radius:999px; padding:4px;
+  box-shadow:inset 0 1px 2px rgba(140,90,75,.08); }
 div[role="radiogroup"] > label{ flex:1 1 0; min-width:0;
   display:flex; align-items:center; justify-content:center;
   background:transparent; border:0; border-radius:999px; padding:6px 12px; margin:0 !important;
   cursor:pointer; transition:background-color .2s, box-shadow .2s, transform .1s; }
 div[role="radiogroup"] > label > div:first-child{ display:none !important; }
+/* let the text wrapper fill the segment (and drop BaseWeb's reserved
+   left padding for the hidden radio dot) so the name centers exactly */
+div[role="radiogroup"] > label > div:last-child{
+  flex:1 1 auto; min-width:0; text-align:center; padding:0 !important; }
+div[role="radiogroup"] > label div[data-testid="stMarkdownContainer"]{ width:100%; }
 div[role="radiogroup"] > label div[data-testid="stMarkdownContainer"] p{
   margin:0; white-space:nowrap; font-size:.86rem; font-weight:600; text-align:center;
-  color:rgba(255,255,255,.94); transition:color .2s; }
-div[role="radiogroup"] > label:hover:not(:has(input:checked)){ background:rgba(255,255,255,.14); }
+  color:var(--accent-deep); transition:color .2s; }
+div[role="radiogroup"] > label:hover:not(:has(input:checked)){ background:rgba(140,90,75,.08); }
 div[role="radiogroup"] > label:active{ transform:scale(.96); }
-div[role="radiogroup"] > label:has(input:checked){ background:#fff; box-shadow:0 2px 8px rgba(39,34,32,.2); }
-div[role="radiogroup"] > label:has(input:checked) div[data-testid="stMarkdownContainer"] p{ color:var(--adk); }
+div[role="radiogroup"] > label:has(input:checked){ background:#fff; box-shadow:0 2px 8px rgba(44,36,32,.16); }
+div[role="radiogroup"] > label:has(input:checked) div[data-testid="stMarkdownContainer"] p{ color:var(--accent-deep); }
 
-.cost-hint{ text-align:center; color:var(--muted); font-size:.78rem; margin:.55rem 0 0; }
+.cost-hint{ text-align:center; color:var(--muted); font-size:.78rem; margin:.55rem 0 1.1rem; }
 .cost-hint b{ color:var(--adk); font-weight:600; }
 
-.stButton>button{ background:linear-gradient(135deg,var(--accent),var(--adk)); color:#fff;
+.stButton>button{ background:linear-gradient(135deg,var(--adk),var(--accent-deep)); color:#fff;
   border:0; border-radius:13px; padding:.85rem 1.2rem; font-weight:600; font-size:.98rem;
-  box-shadow:0 10px 24px rgba(181,121,58,.28); transition:transform .08s,filter .2s; }
+  box-shadow:0 10px 24px rgba(151,104,90,.26); transition:transform .08s,filter .2s; }
 .stButton>button:hover:not(:disabled){ transform:translateY(-1px); filter:brightness(1.04); }
 .stButton>button:disabled{ background:#D6CDC0; box-shadow:none; }
 [data-testid="stDownloadButton"]>button{ background:var(--ink); color:#fff; border:0;
@@ -90,9 +95,12 @@ div[role="radiogroup"] > label:has(input:checked) div[data-testid="stMarkdownCon
   box-shadow:0 10px 24px rgba(39,34,32,.18); }
 [data-testid="stDownloadButton"]>button:hover{ background:#1c1815; }
 
-.pill{ display:inline-block; font-size:11px; font-weight:600; background:#F4EFE8;
-  border:1px solid #EAE3D8; border-radius:999px; padding:3px 11px; color:#6B5E52;
+.pill{ display:inline-block; font-size:11px; font-weight:600; background:var(--accent-soft);
+  border:1px solid var(--line); border-radius:999px; padding:3px 11px; color:var(--accent-deep);
   margin:0 5px 5px 0; }
+.usage{ display:flex; flex-wrap:wrap; justify-content:center; gap:6px;
+  margin-top:.2rem; padding-top:.9rem; border-top:1px solid var(--line); }
+.usage .pill{ margin:0; }
 .note{ color:var(--muted); font-size:.82rem; margin-top:.4rem; }
 .stExpander{ border:1px solid var(--line) !important; border-radius:12px !important; }
 
@@ -114,15 +122,16 @@ div[role="radiogroup"] > label:has(input:checked) div[data-testid="stMarkdownCon
   border:1px solid var(--line); border-radius:12px; overflow:hidden;
   box-shadow:0 1px 2px rgba(39,34,32,.04),0 6px 18px rgba(39,34,32,.04); }
 [class*="st-key-report"] [data-testid="stMarkdownContainer"] thead th{
-  background:linear-gradient(135deg,var(--accent),var(--adk)); color:#fff;
-  font-weight:600; text-align:left; padding:.62rem .85rem; white-space:nowrap; }
+  background:var(--accent-soft); color:var(--accent-deep);
+  font-weight:700; text-align:left; padding:.62rem .85rem; white-space:nowrap;
+  border-bottom:1px solid var(--line); }
 [class*="st-key-report"] [data-testid="stMarkdownContainer"] tbody td{
   padding:.55rem .85rem; border-top:1px solid var(--line); vertical-align:top; }
 [class*="st-key-report"] [data-testid="stMarkdownContainer"] tbody tr:nth-child(even){ background:var(--bg2); }
-[class*="st-key-report"] [data-testid="stMarkdownContainer"] tbody tr:hover{ background:rgba(181,121,58,.07); }
+[class*="st-key-report"] [data-testid="stMarkdownContainer"] tbody tr:hover{ background:rgba(192,142,125,.10); }
 
 [class*="st-key-report"] [data-testid="stMarkdownContainer"] blockquote{
-  background:rgba(181,121,58,.07); border-left:4px solid var(--accent);
+  background:var(--accent-soft); border-left:4px solid var(--accent);
   border-radius:0 10px 10px 0; padding:.75rem 1rem; margin:1.1rem 0; color:var(--ink); }
 [class*="st-key-report"] [data-testid="stMarkdownContainer"] blockquote p{ margin:0; }
 [class*="st-key-report"] [data-testid="stMarkdownContainer"] strong{ color:var(--adk); }
@@ -151,7 +160,7 @@ def start_new():
 
 def pills(r):
     st.markdown(
-        '<div>'
+        '<div class="usage">'
         f'<span class="pill">{r["model_key"]}</span>'
         f'<span class="pill">In {r["in_tok"]:,} · Out {r["out_tok"]:,} tokens</span>'
         f'<span class="pill">₹ {r["cost_inr"]:,.2f} ($ {r["cost_usd"]:.4f})</span>'
@@ -162,13 +171,12 @@ def pills(r):
 st.markdown("""
 <div class="app-header">
   <h1>Ledger Reconciliation</h1>
-  <p>Upload two ledgers — Claude reconciles them live, just like in chat.</p>
+  <p>Upload two ledgers to extract a complete reconciliation report.</p>
 </div>""", unsafe_allow_html=True)
 
 # ── Results view ──────────────────────────────────────────────────────────────
 if "result" in st.session_state:
     r = st.session_state["result"]
-    pills(r)
     with st.container(border=True, key="report"):
         st.markdown(r["report"])
 
@@ -179,10 +187,11 @@ if "result" in st.session_state:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True)
 
-    with st.expander("🔍 Excel structure Claude chose"):
+    with st.expander("🔍 Excel structure"):
         st.json(r["workbook"])
 
     st.button("↺  Start a new reconciliation", on_click=start_new, use_container_width=True)
+    pills(r)
     st.stop()
 
 # ── Form view ─────────────────────────────────────────────────────────────────
@@ -200,7 +209,7 @@ with st.container(border=True):
 
 with st.container(border=True):
     st.markdown('<div class="card-h"><span class="num">2</span>'
-                '<span class="card-t">Choose model & run</span></div>', unsafe_allow_html=True)
+                '<span class="card-t">Choose model &amp; run</span></div>', unsafe_allow_html=True)
     model_key = st.radio("Model", MODEL_NAMES,
                          index=DEFAULT_INDEX, horizontal=True, label_visibility="collapsed")
     st.markdown(
@@ -225,7 +234,7 @@ if run_btn:
             )
 
         st.markdown("### 📄 Reconciliation report")
-        st.caption("Streaming live as Claude writes it — a short pause at the start is Claude thinking.")
+        st.caption("Reconciling the two ledgers — this can take a moment for large files.")
         with st.container(border=True, key="reportlive"):
             st.write_stream(sess.stream_report())
 

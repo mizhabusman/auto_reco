@@ -76,37 +76,74 @@ def describe_api_error(e: Exception) -> tuple[str, str]:
             return ("Your account has run out of credits.",
                     "Add credits or check your plan at console.anthropic.com, "
                     "then try again.")
-        return ("Claude couldn't process this request.",
+        return ("The reconciliation couldn't be processed.",
                 "The files may be unreadable or too large. Try different files.")
     if isinstance(e, anthropic.NotFoundError):
         return ("The selected model isn't available on your account.",
                 "Pick a different model and try again.")
     if isinstance(e, anthropic.OverloadedError):
-        return ("Claude is very busy right now.",
+        return ("The service is very busy right now.",
                 "This is temporary — wait a moment and run it again.")
     if isinstance(e, anthropic.InternalServerError):
-        return ("Claude's servers hit a temporary problem.",
+        return ("The service hit a temporary problem.",
                 "Please run it again in a moment.")
     if isinstance(e, anthropic.APITimeoutError):
         return ("The request took too long and timed out.",
                 "Try again, or pick the faster Haiku model for large files.")
     if isinstance(e, anthropic.APIConnectionError):
-        return ("Couldn't reach Claude.",
+        return ("Couldn't reach the reconciliation service.",
                 "Check your internet connection and try again.")
-    return ("Something went wrong while talking to Claude.",
+    return ("Something went wrong during reconciliation.",
             "Please try again in a moment.")
 
 
 # ---------------------------------------------------------------------------
 # Uploaded file → plain text (Claude reads the structure itself)
 #
-# Any supported format is turned into plain text and handed to Claude as-is.
-# Every reader is tried in turn, so a mislabelled or unusual file still gets
-# read; only a truly unreadable file raises — and then in plain words.
+# Goal: extract EVERYTHING. No row, cell, or line is ever dropped during
+# reading. Each reader captures the complete content of the file; the router
+# picks the right reader by the file's real signature (not just its name),
+# and never sends binary garbage to Claude. A scanned/image PDF (no text to
+# read) is reported clearly instead of being silently mis-read.
 # ---------------------------------------------------------------------------
+class _NoTextPDF(Exception):
+    """A PDF that opened fine but contains no extractable text (a scan/image)."""
+
+
+def _sniff(b: bytes) -> str:
+    """Identify the real format from the file's magic bytes."""
+    head = b[:8]
+    if head[:4] == b"%PDF":
+        return "pdf"
+    if head[:2] == b"PK":                      # zip container: xlsx / xlsm / docx
+        return "zip"
+    if head[:4] == b"\xD0\xCF\x11\xE0":        # OLE2 container: legacy xls / doc
+        return "ole"
+    return "text"
+
+
+def _looks_like_text(b: bytes) -> bool:
+    """True if the bytes are (mostly) decodable text — used to gate the raw
+    fallback so we never hand binary junk to Claude as if it were a ledger."""
+    sample = b[:8192]
+    if not sample or b"\x00" in sample:
+        return False
+    for enc in ("utf-8", "cp1252", "latin-1"):
+        try:
+            s = sample.decode(enc)
+            break
+        except UnicodeDecodeError:
+            s = None
+    if not s:
+        return False
+    printable = sum(ch.isprintable() or ch in "\r\n\t" for ch in s)
+    return printable / len(s) > 0.85
+
+
 def ledger_to_text(file_bytes: bytes, filename: str) -> str:
     name = (filename or "").lower()
     ext = name.rsplit(".", 1)[-1] if "." in name else ""
+    kind = _sniff(file_bytes)
 
     by_ext = {
         "csv": _csv_to_text, "tsv": _csv_to_text, "txt": _csv_to_text,
@@ -116,26 +153,55 @@ def ledger_to_text(file_bytes: bytes, filename: str) -> str:
         "docx": _docx_to_text,
     }
 
-    # Try the reader that matches the extension first, then all the others.
-    order = []
-    if ext in by_ext:
-        order.append(by_ext[ext])
-    for reader in (_excel_to_text, _pdf_to_text, _docx_to_text, _csv_to_text):
+    # Choose the reader by the file's true signature first (most reliable),
+    # then by its extension, then the other structured parsers as a fallback
+    # for mislabelled files. Every reader reads the whole file, so nothing is
+    # lost. The plain-text reader is treated specially: it "succeeds" on ANY
+    # bytes (it just decodes them), so it is only ever tried when the file
+    # genuinely looks like text — otherwise binary junk would slip through.
+    text_like = _looks_like_text(file_bytes)
+    order: list = []
+    if kind == "pdf":
+        order = [_pdf_to_text]
+    elif kind == "zip":                 # xlsx / xlsm / docx
+        order = [_excel_to_text, _docx_to_text]
+    elif kind == "ole":                 # legacy xls / doc
+        order = [_excel_to_text]
+    elif text_like:
+        order = [_csv_to_text]
+    # extension hint (structured formats only; the text reader is gated below)
+    hint = by_ext.get(ext)
+    if hint and hint not in order and hint is not _csv_to_text:
+        order.append(hint)
+    # the other structured parsers safely raise on the wrong format
+    for reader in (_excel_to_text, _pdf_to_text, _docx_to_text):
         if reader not in order:
             order.append(reader)
+    # the raw-text reader last, and only for genuinely text-like bytes
+    if text_like and _csv_to_text not in order:
+        order.append(_csv_to_text)
 
+    scanned_pdf = False
     for reader in order:
         try:
             text = reader(file_bytes)
             if text and text.strip():
                 return text
+        except _NoTextPDF:
+            scanned_pdf = True
         except Exception:
             continue  # not this format — try the next reader
 
-    # Last resort: decode the raw bytes so we never fail on a plain-text file.
-    raw = _decode(file_bytes)
-    if raw.strip():
-        return raw
+    if scanned_pdf or kind == "pdf":
+        raise RecoError(
+            f"“{filename}” looks like a scanned / image-only PDF.",
+            "There is no digital text inside it to read. Please re-export the "
+            "ledger as a text PDF, Excel, or CSV (a scan can't be read reliably).")
+
+    if text_like:
+        raw = _decode(file_bytes)
+        if raw.strip():
+            return raw
 
     raise RecoError(
         f"Couldn't read “{filename}”.",
@@ -152,13 +218,28 @@ def _decode(b: bytes) -> str:
     return b.decode("utf-8", errors="replace")
 
 
+def _best_delimiter(text: str) -> str:
+    """Detect the delimiter, falling back to whichever splits rows most
+    consistently — so columns are never accidentally glued together."""
+    sample = text[:8192]
+    try:
+        return _csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
+    except _csv.Error:
+        best, best_score = ",", -1
+        lines = [ln for ln in sample.splitlines() if ln.strip()][:50]
+        for d in (",", ";", "\t", "|"):
+            counts = [ln.count(d) for ln in lines]
+            score = min(counts) if counts else 0   # every row splits the same way
+            if score > best_score:
+                best, best_score = d, score
+        return best
+
+
 def _csv_to_text(b: bytes) -> str:
     text = _decode(b)
-    delim = ","
-    try:
-        delim = _csv.Sniffer().sniff(text[:4096], delimiters=",;\t|").delimiter
-    except _csv.Error:
-        pass
+    delim = _best_delimiter(text)
+    # csv.reader handles quoted fields and newlines inside quotes correctly,
+    # so no row is split or lost. Only fully-blank rows are skipped.
     rows = [r for r in _csv.reader(io.StringIO(text), delimiter=delim)
             if any(c.strip() for c in r)]
     buf = io.StringIO()
@@ -168,15 +249,21 @@ def _csv_to_text(b: bytes) -> str:
 
 def _excel_to_text(b: bytes) -> str:
     last = None
+    # openpyxl (xlsx/xlsm), xlrd (legacy xls), then pandas' auto-pick.
     for engine in ("openpyxl", "xlrd", None):
         try:
             xl = pd.ExcelFile(io.BytesIO(b), engine=engine) if engine else pd.ExcelFile(io.BytesIO(b))
             parts = []
-            for sheet in xl.sheet_names:
+            for sheet in xl.sheet_names:                     # every sheet, incl. hidden
                 df = xl.parse(sheet, header=None, dtype=str, keep_default_na=False)
+                # Trim only rows/cols that are entirely empty (they carry no data).
                 df = df.replace("", pd.NA).dropna(how="all").dropna(axis=1, how="all").fillna("")
+                if df.empty:
+                    continue
                 parts.append(f"## Sheet: {sheet}\n{df.to_csv(index=False, header=False)}")
-            return "\n\n".join(parts)
+            if parts:
+                return "\n\n".join(parts)
+            raise RuntimeError("workbook had no data rows")
         except Exception as e:  # try the next engine
             last = e
     raise RuntimeError(f"Could not read the file: {last}")
@@ -188,37 +275,68 @@ def _pdf_to_text(b: bytes) -> str:
     parts = []
     with pdfplumber.open(io.BytesIO(b)) as pdf:
         for i, page in enumerate(pdf.pages, 1):
-            chunk = ""
-            tables = page.extract_tables() or []
-            if tables:
-                buf = io.StringIO()
-                w = _csv.writer(buf)
-                for table in tables:
-                    for row in table:
-                        w.writerow(["" if c is None else str(c).strip() for c in row])
-                chunk = buf.getvalue()
-            else:
-                chunk = page.extract_text() or ""
-            if chunk.strip():
-                parts.append(f"## Page {i}\n{chunk}")
+            # extract_text() returns EVERY text object on the page, so nothing
+            # on the page is skipped (unlike table-only extraction, which drops
+            # any text the table detector misses). layout=True keeps columns
+            # aligned by position so rows stay readable as a table.
+            txt = ""
+            try:
+                txt = page.extract_text(layout=True) or ""
+            except Exception:
+                txt = ""
+            if not txt.strip():
+                try:
+                    txt = page.extract_text() or ""
+                except Exception:
+                    txt = ""
+            if txt.strip():
+                parts.append(f"## Page {i}\n{txt}")
     text = "\n\n".join(parts).strip()
     if not text:
-        raise RuntimeError("no extractable text in PDF")
+        raise _NoTextPDF()  # opened fine but no readable text → scan/image
     return text
 
 
 def _docx_to_text(b: bytes) -> str:
     import docx  # python-docx; lazy for the same reason as above
+    from docx.oxml.ns import qn
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
 
     d = docx.Document(io.BytesIO(b))
-    parts = [p.text for p in d.paragraphs if p.text.strip()]
-    for ti, table in enumerate(d.tables, 1):
+    out = []
+
+    def emit_table(tbl):
         buf = io.StringIO()
         w = _csv.writer(buf)
-        for row in table.rows:
-            w.writerow([c.text.strip() for c in row.cells])
-        parts.append(f"## Table {ti}\n{buf.getvalue()}")
-    text = "\n".join(parts).strip()
+        for row in tbl.rows:
+            seen, vals = set(), []
+            for cell in row.cells:
+                tc = id(cell._tc)          # merged cells repeat — count each once
+                if tc in seen:
+                    continue
+                seen.add(tc)
+                vals.append(cell.text.replace("\n", " ").strip())
+            w.writerow(vals)
+        out.append(buf.getvalue())
+
+    # Walk the document body in order so paragraphs and tables stay in sequence.
+    for child in d.element.body.iterchildren():
+        if child.tag == qn("w:p"):
+            t = Paragraph(child, d).text
+            if t.strip():
+                out.append(t)
+        elif child.tag == qn("w:tbl"):
+            emit_table(Table(child, d))
+
+    # Headers & footers can hold running totals — include them too.
+    for sec in d.sections:
+        for hf in (sec.header, sec.footer):
+            for p in hf.paragraphs:
+                if p.text.strip():
+                    out.append(p.text)
+
+    text = "\n".join(out).strip()
     if not text:
         raise RuntimeError("no text in .docx")
     return text
